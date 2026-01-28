@@ -3,171 +3,171 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.fft import fft, fftfreq
-import time
 
-# --- FUNGSI FFT ---
-def perform_esa_analysis(signal_data, fs):
+# ==========================================
+# 1. FUNGSI OTAK DIAGNOSA (ALGORITMA)
+# ==========================================
+def analyze_and_diagnose(signal_data, fs):
+    # A. Lakukan FFT
     N = len(signal_data)
     yf = fft(signal_data)
     xf = fftfreq(N, 1 / fs)
+    
+    # Ambil sisi positif saja
     xf = xf[:N//2]
     amplitude = 2.0/N * np.abs(yf[0:N//2])
-    amplitude_db = 20 * np.log10(amplitude + 1e-6)
-    return xf, amplitude_db
-
-# --- SETUP HALAMAN ---
-st.set_page_config(layout="wide", page_title="ESA All-in-One Simulator")
-
-st.title("⚡ ESA Multi-Fault Simulator")
-st.markdown("**Infrastructure Management - Pertamina Patra Niaga**")
-st.markdown("Prototype simulasi diagnosa 4 kondisi utama motor listrik.")
-
-# --- SIDEBAR KONTROL UTAMA ---
-st.sidebar.header("⚙️ Panel Kontrol")
-
-# Pilihan Skenario Kerusakan
-fault_type = st.sidebar.radio(
-    "Pilih Skenario Diagnosa:",
-    ("1. Motor Sehat (Healthy)", 
-     "2. Broken Rotor Bar", 
-     "3. Bearing Fault", 
-     "4. Power Harmonics")
-)
-
-st.sidebar.divider()
-severity = st.sidebar.slider("Tingkat Keparahan (Severity)", 0.0, 10.0, 0.0)
-noise_level = st.sidebar.slider("Level Noise Lapangan", 0.0, 1.0, 0.1)
-
-# --- LOGIKA GENERATOR SINYAL ---
-def generate_signal(fault_mode, sev, noise, duration=1.0, fs=2000):
-    t = np.linspace(0.0, duration, int(fs * duration), endpoint=False)
     
-    # 1. Fundamental (50Hz) - Selalu ada
+    # Konversi ke dB (hindari log 0)
+    amplitude_db = 20 * np.log10(amplitude + 1e-9)
+    
+    # B. Temukan Puncak Fundamental (Sekitar 50Hz)
+    # Cari index frekuensi yang paling dekat dengan 50Hz
+    idx_50 = np.argmin(np.abs(xf - 50))
+    # Cari puncak tertinggi di radius 5Hz sekitar 50Hz (untuk akurasi)
+    search_radius = 100 # index points
+    idx_peak = idx_50 - search_radius + np.argmax(amplitude_db[idx_50-search_radius : idx_50+search_radius])
+    
+    freq_fund = xf[idx_peak]
+    amp_fund = amplitude_db[idx_peak]
+    
+    # C. Cek Sidebands (Indikasi Rotor Bar)
+    # Kita cari di area kiri (sekitar -5Hz dari fundamental)
+    target_sb_left = freq_fund - 5 
+    idx_sb_left = np.argmin(np.abs(xf - target_sb_left))
+    # Cari puncak lokal di sekitar situ
+    idx_peak_sb = idx_sb_left - 50 + np.argmax(amplitude_db[idx_sb_left-50 : idx_sb_left+50])
+    
+    amp_sb = amplitude_db[idx_peak_sb]
+    
+    # D. Cek Harmonisa ke-3 (Indikasi Power Quality)
+    idx_h3 = np.argmin(np.abs(xf - (freq_fund * 3)))
+    amp_h3 = amplitude_db[idx_h3]
+
+    # --- LOGIKA KEPUTUSAN (RULE BASED) ---
+    diagnosis = []
+    status = "NORMAL"
+    
+    # Rule 1: Cek Rotor (Selisih dB Sideband vs Fundamental)
+    diff_rotor = amp_fund - amp_sb
+    if diff_rotor < 40: # Jika selisih kurang dari 40dB (Sideband tinggi)
+        status = "CRITICAL"
+        diagnosis.append(f"⚠️ **BROKEN ROTOR BAR DETECTED!** (Sideband High: -{diff_rotor:.1f} dB diff)")
+    
+    # Rule 2: Cek Harmonisa
+    diff_harm = amp_fund - amp_h3
+    if diff_harm < 50:
+        if status != "CRITICAL": status = "WARNING"
+        diagnosis.append(f"⚠️ **POWER QUALITY ISSUE** (High 3rd Harmonic)")
+
+    if status == "NORMAL":
+        diagnosis.append("✅ Motor dalam kondisi Prima. Tidak ada anomali signifikan.")
+
+    return xf, amplitude_db, status, diagnosis, freq_fund
+
+# ==========================================
+# 2. FUNGSI BANTUAN: MEMBUAT CSV DUMMY
+# ==========================================
+def create_dummy_csv(condition):
+    fs = 2000
+    duration = 2.0
+    t = np.linspace(0.0, duration, int(fs*duration), endpoint=False)
+    
+    # Sinyal Dasar
     sig = 100 * np.sin(2 * np.pi * 50 * t)
     
-    # 2. Logika Sesuai Mode
-    if "Sehat" in fault_mode:
-        # Tidak ada tambahan sinyal gangguan
-        pass
-        
-    elif "Rotor Bar" in fault_mode:
-        # Sidebands dekat (45Hz & 55Hz)
-        # Rumus: 50 +/- (2 * slip_freq)
-        sb_amp = sev * 2.5 # Pengali amplitudo
-        sig += sb_amp * np.sin(2 * np.pi * 45 * t)
-        sig += sb_amp * np.sin(2 * np.pi * 55 * t)
-        
-    elif "Bearing" in fault_mode:
-        # Bearing biasanya memodulasi di frekuensi mekanis (bukan kelipatan slip)
-        # Kita simulasikan di 30Hz & 70Hz (jarak 20Hz dari fundamental)
-        # Dan menambahkan 'Broadband Noise' (lantai noise naik)
-        bearing_amp = sev * 1.5
-        sig += bearing_amp * np.sin(2 * np.pi * 30 * t) # Outer Race freq simulation
-        sig += bearing_amp * np.sin(2 * np.pi * 70 * t)
-        # Bearing rusak sering membuat sinyal terlihat 'kasar'
-        noise = noise * (1 + (sev/5)) 
-        
-    elif "Harmonics" in fault_mode:
-        # Harmonisa kelipatan ganjil: 3rd (150Hz) dan 5th (250Hz)
-        # Ini merusak bentuk gelombang sinus (Distorsi)
-        h3_amp = sev * 3.0
-        h5_amp = sev * 1.5
-        sig += h3_amp * np.sin(2 * np.pi * 150 * t)
-        sig += h5_amp * np.sin(2 * np.pi * 250 * t)
-
-    # 3. Tambahkan Noise Random
-    sig += np.random.normal(0, noise * 5, len(t))
-    
-    return t, sig
-
-# --- GENERATE DATA UTAMA ---
-fs = 2000
-t, signal_total = generate_signal(fault_type, severity, noise_level, duration=0.2, fs=fs) # Durasi pendek untuk zoom view
-_, signal_full = generate_signal(fault_type, severity, noise_level, duration=1.0, fs=fs) # Durasi panjang untuk FFT akurat
-
-# Analisa FFT
-xf, y_db = perform_esa_analysis(signal_full, fs)
-
-# --- VISUALISASI ---
-col1, col2 = st.columns([1, 1])
-
-# GRAFIK 1: TIME DOMAIN (BENTUK GELOMBANG)
-with col1:
-    st.subheader("1. Time Domain (Bentuk Gelombang)")
-    fig_time = go.Figure()
-    fig_time.add_trace(go.Scatter(x=t, y=signal_total, mode='lines', name='Arus', line=dict(color='#00CC96')))
-    
-    # Anotasi Edukasi Time Domain
-    if "Harmonics" in fault_type and severity > 3:
-        st.caption("Perhatikan: Gelombang tidak lagi sinus mulus, tapi 'penyok' akibat harmonisa.")
-    elif "Bearing" in fault_type and severity > 3:
-        st.caption("Perhatikan: Gelombang terlihat kasar/berbulu akibat getaran bearing.")
+    if condition == "Rusak (Rotor)":
+        # Tambah Sidebands
+        sig += 5 * np.sin(2 * np.pi * 45 * t)
+        sig += 5 * np.sin(2 * np.pi * 55 * t)
+        filename = "motor_rusak_rotor.csv"
     else:
-        st.caption("Gelombang arus listrik (Zoom 0.2 detik).")
+        # Sehat
+        filename = "motor_sehat.csv"
         
-    fig_time.update_layout(height=400, xaxis_title="Waktu (s)", yaxis_title="Amper (A)")
-    st.plotly_chart(fig_time, use_container_width=True)
+    sig += np.random.normal(0, 0.5, len(t)) # Sedikit noise
+    
+    # Simpan ke DataFrame
+    df = pd.DataFrame(sig)
+    return df.to_csv(index=False, header=False), filename
 
-# GRAFIK 2: FREQUENCY DOMAIN (SPEKTRUM ESA)
-with col2:
-    st.subheader("2. Frequency Domain (Diagnosa)")
-    fig_fft = go.Figure()
-    fig_fft.add_trace(go.Scatter(x=xf, y=y_db, mode='lines', name='Spectrum', line=dict(color='#EF553B')))
-    
-    # Marker 50Hz
-    fig_fft.add_vline(x=50, line_dash="dash", line_color="green", annotation_text="50Hz")
-    
-    # Logika Zoom & Marker berdasarkan Fault Type
-    if "Rotor" in fault_type:
-        st.caption("Diagnosa: Perhatikan **Sidebands** kembar yang muncul mengapit 50Hz.")
-        fig_fft.update_xaxes(range=[30, 70]) # Zoom dekat
-        if severity > 1:
-            fig_fft.add_vline(x=45, line_dash="dot", line_color="red", annotation_text="L-Side")
-            fig_fft.add_vline(x=55, line_dash="dot", line_color="red", annotation_text="R-Side")
+# ==========================================
+# 3. INTERFACE STREAMLIT
+# ==========================================
+st.set_page_config(layout="wide", page_title="ESA Auto-Diagnose")
+st.title("🤖 ESA Automated Diagnosis System")
+st.markdown("**Infrastructure Management - Pertamina Patra Niaga**")
+
+# --- SIDEBAR: DOWNLOAD DATA SAMPLE ---
+st.sidebar.header("1. Persiapan Data (Simulasi)")
+st.sidebar.info("Gunakan tombol ini untuk download contoh file CSV, lalu upload ulang di menu utama untuk mengetes diagnosa.")
+
+# Tombol Download CSV Sehat
+csv_sehat, name_sehat = create_dummy_csv("Sehat")
+st.sidebar.download_button("⬇️ Download CSV Contoh: Motor Sehat", csv_sehat, name_sehat, "text/csv")
+
+# Tombol Download CSV Rusak
+csv_rusak, name_rusak = create_dummy_csv("Rusak (Rotor)")
+st.sidebar.download_button("⬇️ Download CSV Contoh: Motor Rusak", csv_rusak, name_rusak, "text/csv")
+
+# --- MAIN AREA: UPLOAD & DIAGNOSA ---
+st.divider()
+st.header("2. Upload & Analisa Data Lapangan")
+
+uploaded_file = st.file_uploader("Upload File Rekaman Arus (Format .csv)", type=["csv", "txt"])
+
+if uploaded_file is not None:
+    try:
+        # Baca File
+        df = pd.read_csv(uploaded_file, header=None)
+        data_signal = df.iloc[:, 0].values # Ambil kolom pertama
+        
+        # PROSES OTOMATIS
+        fs_input = 2000 # Asumsi sampling rate (bisa dibuat inputan user jika perlu)
+        xf, y_db, status, diagnosis_list, freq_fund = analyze_and_diagnose(data_signal, fs_input)
+        
+        # --- TAMPILAN HASIL DIAGNOSA (KARTU LAPORAN) ---
+        st.subheader("📋 Laporan Hasil Diagnosa")
+        
+        # Warna Status
+        status_color = "green" if status == "NORMAL" else "red"
+        if status == "WARNING": status_color = "orange"
+        
+        col_stat, col_det = st.columns([1, 2])
+        
+        with col_stat:
+            st.markdown(f"""
+            <div style="text-align: center; border: 2px solid {status_color}; padding: 20px; border-radius: 10px;">
+                <h2 style="color: {status_color}; margin:0;">{status}</h2>
+                <p>Condition Status</p>
+            </div>
+            """, unsafe_allow_html=True)
             
-    elif "Bearing" in fault_type:
-        st.caption("Diagnosa: Perhatikan frekuensi gangguan mekanis (biasanya lebih lebar dari sideband rotor).")
-        fig_fft.update_xaxes(range=[0, 100]) # Zoom medium
-        if severity > 1:
-            fig_fft.add_vline(x=30, line_dash="dot", line_color="orange", annotation_text="Bearing Freq")
-            fig_fft.add_vline(x=70, line_dash="dot", line_color="orange", annotation_text="Bearing Freq")
+        with col_det:
+            for diag in diagnosis_list:
+                if "✅" in diag:
+                    st.success(diag)
+                else:
+                    st.error(diag)
+            st.caption(f"Fundamental Frequency Detected: {freq_fund:.2f} Hz")
 
-    elif "Harmonics" in fault_type:
-        st.caption("Diagnosa: Perhatikan munculnya tiang di kelipatan 50Hz (150Hz, 250Hz).")
-        fig_fft.update_xaxes(range=[0, 300]) # Zoom jauh (Wideband)
-        if severity > 1:
-            fig_fft.add_vline(x=150, line_dash="dot", line_color="purple", annotation_text="3rd Harm")
-            fig_fft.add_vline(x=250, line_dash="dot", line_color="purple", annotation_text="5th Harm")
-            
-    else: # Sehat
-        st.caption("Diagnosa: Spektrum bersih. Hanya ada satu puncak dominan di 50Hz.")
-        fig_fft.update_xaxes(range=[0, 100])
+        # --- TAMPILAN GRAFIK ---
+        st.divider()
+        st.subheader("📊 Visualisasi Spektrum")
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=xf, y=y_db, mode='lines', name='Spectrum', line=dict(color='#1f77b4')))
+        
+        # Tambah garis batas aman (Threshold)
+        peak_amp = np.max(y_db)
+        fig.add_hline(y=peak_amp-40, line_dash="dash", line_color="red", annotation_text="Limit Bahaya (-40dB)")
+        
+        fig.update_layout(xaxis_title="Frekuensi (Hz)", yaxis_title="Amplitudo (dB)", height=500)
+        fig.update_xaxes(range=[0, 100]) # Zoom default ke area relevan
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Gagal membaca file: {e}")
+        st.info("Pastikan file CSV hanya berisi 1 kolom angka (data arus).")
 
-    fig_fft.update_yaxes(range=[-40, 80], title="Amplitude (dB)")
-    fig_fft.update_layout(height=400, xaxis_title="Frekuensi (Hz)")
-    st.plotly_chart(fig_fft, use_container_width=True)
-
-# --- PENJELASAN TEKNIS (Expandable) ---
-with st.expander("📘 Penjelasan Teknis & Rumus Diagnosa"):
-    st.markdown("""
-    ### Panduan Membaca Grafik
-    
-    **1. Motor Sehat (Healthy)**
-    * **Grafik:** Bersih, hanya ada satu tiang tinggi di **50Hz**.
-    * **Arti:** Listrik murni, motor berputar presisi.
-    
-    **2. Broken Rotor Bar**
-    * **Grafik:** Muncul "pengawal" kecil di kiri-kanan 50Hz (misal 45Hz & 55Hz).
-    * **Rumus:** $F_{sideband} = F_{line} \pm (2 \times Slip)$.
-    * **Bahaya:** Rotor panas berlebih, bisa melukai stator (konslet).
-    
-    **3. Bearing Fault**
-    * **Grafik:** Muncul frekuensi aneh (bukan kelipatan 50) atau noise lantai naik.
-    * **Fisika:** Bola bearing yang cacat memukul dinding race, memodulasi celah udara.
-    * **Bahaya:** Motor macet (jammed), as patah.
-    
-    **4. Harmonics (Kualitas Daya)**
-    * **Grafik:** Muncul tiang di 150Hz (Harmonisa ke-3), 250Hz (ke-5), dst.
-    * **Fisika:** Akibat beban non-linear (VSD, Lampu LED besar, Rectifier).
-    * **Bahaya:** Motor cepat panas (overheat) meski beban ringan.
-    """)
+else:
+    st.info("👋 Silakan upload file CSV untuk memulai diagnosa otomatis.")
