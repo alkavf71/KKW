@@ -1,5 +1,7 @@
 streamlit
+tensorflow
 numpy
-pandas
 scipy
-plotly
+matplotlib
+pandas
+Pillow
