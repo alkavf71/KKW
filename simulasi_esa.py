@@ -41,9 +41,8 @@ def generate_live_signals(freq, v_noise_level, rotor_fault_level, duration=0.5, 
     current += np.random.normal(0, 0.5, len(t))
     
     return t, voltage, current
-
 # ==========================================
-# 2. FUNGSI ANALISA & DIAGNOSA
+# 2. FUNGSI ANALISA & DIAGNOSA (UPDATE SENSITIF)
 # ==========================================
 def analyze_signals(voltage, current, fs=2000):
     N = len(voltage)
@@ -63,62 +62,59 @@ def analyze_signals(voltage, current, fs=2000):
     idx_peak = np.argmax(v_amp)
     freq_fund = xf[idx_peak]
     
-    # --- LOGIKA DIAGNOSA ESA ---
+    # --- LOGIKA DIAGNOSA ESA (UPDATE) ---
     diagnosis = []
     status = "NORMAL"
     
     # 1. Cek Kualitas Tegangan (Distorsi Suplai)
-    # Kita cek apakah ada "sampah" di sinyal tegangan selain di frekuensi utama
     v_clean_amp = v_amp[idx_peak]
     v_total_amp = np.sum(v_amp)
-    # Ratio sederhana distorsi
     distortion_ratio = (v_total_amp - v_clean_amp) / v_clean_amp 
     
-    if distortion_ratio > 0.15: # Ambang batas
+    if distortion_ratio > 0.15: 
         status = "WARNING"
-        diagnosis.append("⚠️ **SUPPLY ISSUE:** Tegangan (Oranye) terdistorsi! Genset/PLN bermasalah.")
+        diagnosis.append("⚠️ **SUPPLY ISSUE:** Tegangan terdistorsi! Genset/PLN bermasalah.")
         
     # 2. Cek Kerusakan Rotor (Sideband di Arus)
-    # Cari amplitudo sideband di Arus (sekitar freq - 5Hz)
     target_sb = freq_fund - 5
     idx_sb = np.argmin(np.abs(xf - target_sb))
-    # Cari peak lokal di area sideband Arus
-    idx_peak_sb_i = idx_sb - 20 + np.argmax(i_db[idx_sb-20 : idx_sb+20])
+    
+    # Cari peak sideband Arus & Tegangan
+    window = 20
+    idx_peak_sb_i = idx_sb - window + np.argmax(i_db[idx_sb-window : idx_sb+window])
     sb_height_i = i_db[idx_peak_sb_i]
     fund_height_i = i_db[idx_peak]
     
-    diff_i = fund_height_i - sb_height_i
-    
-    # KUNCI ESA: Cek apakah sideband itu juga ada di Tegangan?
-    idx_peak_sb_v = idx_sb - 20 + np.argmax(v_db[idx_sb-20 : idx_sb+20])
+    idx_peak_sb_v = idx_sb - window + np.argmax(v_db[idx_sb-window : idx_sb+window])
     sb_height_v = v_db[idx_peak_sb_v]
     fund_height_v = v_db[idx_peak]
     
-    diff_v = fund_height_v - sb_height_v
+    # Hitung Selisih dB
+    diff_i = fund_height_i - sb_height_i # Selisih Arus
+    diff_v = fund_height_v - sb_height_v # Selisih Tegangan
     
-    # --- LOGIKA BARU (LEBIH SENSITIF & BERTINGKAT) ---
+    # --- LOGIKA BERTINGKAT (SENSITIF) ---
     
-    # Threshold ESA Standard (IEEE):
-    # > 45 dB : Excellent (Sehat Walafiat)
-    # 35 - 45 dB : Good (Mulai ada gejala penuaan)
-    # 30 - 35 dB : Warning (Kerusakan terdeteksi, monitor ketat)
-    # < 30 dB : Critical (Rusak Parah, segera ganti)
-
-    # Cek Arus (Apakah ada sideband?)
+    # LEVEL 1: CRITICAL (Selisih < 30 dB) - Rusak Parah
     if diff_i < 30: 
-        # Kasus 1: Sideband Tinggi Sekali (CRITICAL)
         if diff_v > 50: # Tegangan Bersih
             status = "CRITICAL"
-            diagnosis.append("⚠️ **MOTOR FAULT:** Broken Rotor Bar Parah! (<30dB). Segera jadwalkan perbaikan.")
+            diagnosis.append("⚠️ **MOTOR FAULT:** Broken Rotor Bar PARAH (<30dB). Segera ganti motor.")
         else:
-            status = "WARNING"
-            diagnosis.append("⚠️ **POWER ISSUE:** Arus & Tegangan sama-sama kotor parah.")
-            
-    elif diff_i < 40:
-        # Kasus 2: Sideband Sedang (WARNING) - INI YANG ANDA CARI
-        if diff_v > 50:
-            status = "WARNING"
-            diagnosis.append("⚠️ **EARLY WARNING:** Gejala Rotor Bar mulai muncul (30-40dB). Perlu monitoring berkala.")
+            if status != "WARNING": status = "WARNING"
+            diagnosis.append("⚠️ **POWER ISSUE:** Tegangan supply kotor, arus ikut kotor.")
+
+    # LEVEL 2: WARNING (Selisih 30 - 45 dB) - Gejala Awal
+    # Ini bagian baru agar slider kerasa responsif
+    elif diff_i < 45:
+        if diff_v > 50: # Tegangan Masih Bersih
+            if status == "NORMAL": status = "WARNING"
+            diagnosis.append(f"⚠️ **EARLY WARNING:** Gejala awal Rotor Bar terdeteksi (Selisih {diff_i:.1f} dB). Perlu monitoring.")
+
+    if status == "NORMAL":
+        diagnosis.append("✅ Sistem Sehat (Source & Load Aman).")
+        
+    return t, xf, v_db, i_db, status, diagnosis, freq_fund
 
 # ==========================================
 # 3. TAMPILAN DASHBOARD
