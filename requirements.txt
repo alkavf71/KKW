@@ -1,7 +1,5 @@
 streamlit
-tensorflow
 numpy
-scipy
-matplotlib
 pandas
-Pillow
+scipy
+plotly
