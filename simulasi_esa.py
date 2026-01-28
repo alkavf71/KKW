@@ -96,20 +96,29 @@ def analyze_signals(voltage, current, fs=2000):
     
     diff_v = fund_height_v - sb_height_v
     
-    # Logic: Jika di Arus sidebandnya KUAT, tapi di Tegangan LEMAH -> Motor Rusak
-    if diff_i < 30: # Arus ada gangguan
-        if diff_v > 50: # Tegangan bersih
-            status = "CRITICAL"
-            diagnosis.append("⚠️ **MOTOR FAULT:** Broken Rotor Bar detected! (Masalah murni internal motor).")
-        else:
-            # Tegangan juga ada gangguan serupa (kemungkinan noise ikut dari supply)
-            if "SUPPLY ISSUE" not in str(diagnosis):
-                 diagnosis.append("ℹ️ **INFO:** Arus kotor, tapi Tegangan juga kotor. Kemungkinan bukan kerusakan motor.")
+    # --- LOGIKA BARU (LEBIH SENSITIF & BERTINGKAT) ---
+    
+    # Threshold ESA Standard (IEEE):
+    # > 45 dB : Excellent (Sehat Walafiat)
+    # 35 - 45 dB : Good (Mulai ada gejala penuaan)
+    # 30 - 35 dB : Warning (Kerusakan terdeteksi, monitor ketat)
+    # < 30 dB : Critical (Rusak Parah, segera ganti)
 
-    if status == "NORMAL":
-        diagnosis.append("✅ Sistem Sehat (Source & Load Aman).")
-        
-    return t, xf, v_db, i_db, status, diagnosis, freq_fund
+    # Cek Arus (Apakah ada sideband?)
+    if diff_i < 30: 
+        # Kasus 1: Sideband Tinggi Sekali (CRITICAL)
+        if diff_v > 50: # Tegangan Bersih
+            status = "CRITICAL"
+            diagnosis.append("⚠️ **MOTOR FAULT:** Broken Rotor Bar Parah! (<30dB). Segera jadwalkan perbaikan.")
+        else:
+            status = "WARNING"
+            diagnosis.append("⚠️ **POWER ISSUE:** Arus & Tegangan sama-sama kotor parah.")
+            
+    elif diff_i < 40:
+        # Kasus 2: Sideband Sedang (WARNING) - INI YANG ANDA CARI
+        if diff_v > 50:
+            status = "WARNING"
+            diagnosis.append("⚠️ **EARLY WARNING:** Gejala Rotor Bar mulai muncul (30-40dB). Perlu monitoring berkala.")
 
 # ==========================================
 # 3. TAMPILAN DASHBOARD
