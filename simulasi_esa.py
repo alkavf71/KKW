@@ -49,7 +49,7 @@ def analyze_and_diagnose(signal_data, fs):
     
     # Rule 1: Cek Rotor (Selisih dB Sideband vs Fundamental)
     diff_rotor = amp_fund - amp_sb
-    if diff_rotor < 40: # Jika selisih kurang dari 40dB (Sideband tinggi)
+    if diff_rotor < 30: # Jika selisih kurang dari 40dB (Sideband tinggi)
         status = "CRITICAL"
         diagnosis.append(f"⚠️ **BROKEN ROTOR BAR DETECTED!** (Sideband High: -{diff_rotor:.1f} dB diff)")
     
@@ -84,7 +84,7 @@ def create_dummy_csv(condition):
         # Sehat
         filename = "motor_sehat.csv"
         
-    sig += np.random.normal(0, 0.5, len(t)) # Sedikit noise
+    sig += np.random.normal(0, 0.1, len(t)) # Sedikit noise
     
     # Simpan ke DataFrame
     df = pd.DataFrame(sig)
