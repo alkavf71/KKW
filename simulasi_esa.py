@@ -12,177 +12,162 @@ def perform_esa_analysis(signal_data, fs):
     xf = fftfreq(N, 1 / fs)
     xf = xf[:N//2]
     amplitude = 2.0/N * np.abs(yf[0:N//2])
-    # Hindari log(0)
     amplitude_db = 20 * np.log10(amplitude + 1e-6)
     return xf, amplitude_db
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(layout="wide", page_title="ESA Analyzer - Pertamina Patra Niaga")
+# --- SETUP HALAMAN ---
+st.set_page_config(layout="wide", page_title="ESA All-in-One Simulator")
 
-# --- HEADER ---
-st.title("⚡ ESA Real-time Analyzer Prototype")
+st.title("⚡ ESA Multi-Fault Simulator")
 st.markdown("**Infrastructure Management - Pertamina Patra Niaga**")
+st.markdown("Prototype simulasi diagnosa 4 kondisi utama motor listrik.")
 
-# --- TABS ---
-tab1, tab2, tab3 = st.tabs(["🎛️ Simulasi Konsep", "📂 Analisa File (CSV)", "🔴 Real-time Monitor"])
+# --- SIDEBAR KONTROL UTAMA ---
+st.sidebar.header("⚙️ Panel Kontrol")
 
-# =========================================
-# TAB 1: MODE SIMULASI (Edukasi - Slider)
-# =========================================
-with tab1:
-    col_control, col_display = st.columns([1, 3])
-    with col_control:
-        st.subheader("Parameter Manual")
-        freq_fund = st.number_input("Frekuensi (Hz)", 50.0, disabled=True, key="f1")
-        severity = st.slider("Tingkat Kerusakan", 0.0, 10.0, 0.0, key="s1")
-        noise = st.slider("Noise Level", 0.0, 0.5, 0.05, key="n1")
-        st.info("Geser slider untuk melihat efek statis.")
+# Pilihan Skenario Kerusakan
+fault_type = st.sidebar.radio(
+    "Pilih Skenario Diagnosa:",
+    ("1. Motor Sehat (Healthy)", 
+     "2. Broken Rotor Bar", 
+     "3. Bearing Fault", 
+     "4. Power Harmonics")
+)
 
-    # Generate Data Statis
-    fs = 2000
-    duration = 1.0
-    N = int(fs * duration)
-    t = np.linspace(0.0, duration, N, endpoint=False)
+st.sidebar.divider()
+severity = st.sidebar.slider("Tingkat Keparahan (Severity)", 0.0, 10.0, 0.0)
+noise_level = st.sidebar.slider("Level Noise Lapangan", 0.0, 1.0, 0.1)
+
+# --- LOGIKA GENERATOR SINYAL ---
+def generate_signal(fault_mode, sev, noise, duration=1.0, fs=2000):
+    t = np.linspace(0.0, duration, int(fs * duration), endpoint=False)
     
-    sig_pure = 100 * np.sin(2 * np.pi * freq_fund * t)
-    sig_fault = (severity * 2) * np.sin(2 * np.pi * (freq_fund-5) * t) + \
-                (severity * 2) * np.sin(2 * np.pi * (freq_fund+5) * t)
-    sig_total = sig_pure + sig_fault + np.random.normal(0, noise * 10, N)
+    # 1. Fundamental (50Hz) - Selalu ada
+    sig = 100 * np.sin(2 * np.pi * 50 * t)
+    
+    # 2. Logika Sesuai Mode
+    if "Sehat" in fault_mode:
+        # Tidak ada tambahan sinyal gangguan
+        pass
+        
+    elif "Rotor Bar" in fault_mode:
+        # Sidebands dekat (45Hz & 55Hz)
+        # Rumus: 50 +/- (2 * slip_freq)
+        sb_amp = sev * 2.5 # Pengali amplitudo
+        sig += sb_amp * np.sin(2 * np.pi * 45 * t)
+        sig += sb_amp * np.sin(2 * np.pi * 55 * t)
+        
+    elif "Bearing" in fault_mode:
+        # Bearing biasanya memodulasi di frekuensi mekanis (bukan kelipatan slip)
+        # Kita simulasikan di 30Hz & 70Hz (jarak 20Hz dari fundamental)
+        # Dan menambahkan 'Broadband Noise' (lantai noise naik)
+        bearing_amp = sev * 1.5
+        sig += bearing_amp * np.sin(2 * np.pi * 30 * t) # Outer Race freq simulation
+        sig += bearing_amp * np.sin(2 * np.pi * 70 * t)
+        # Bearing rusak sering membuat sinyal terlihat 'kasar'
+        noise = noise * (1 + (sev/5)) 
+        
+    elif "Harmonics" in fault_mode:
+        # Harmonisa kelipatan ganjil: 3rd (150Hz) dan 5th (250Hz)
+        # Ini merusak bentuk gelombang sinus (Distorsi)
+        h3_amp = sev * 3.0
+        h5_amp = sev * 1.5
+        sig += h3_amp * np.sin(2 * np.pi * 150 * t)
+        sig += h5_amp * np.sin(2 * np.pi * 250 * t)
 
-    xf, y_db = perform_esa_analysis(sig_total, fs)
+    # 3. Tambahkan Noise Random
+    sig += np.random.normal(0, noise * 5, len(t))
+    
+    return t, sig
 
-    with col_display:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=xf, y=y_db, name='Spectrum', line=dict(color='#EF553B')))
-        fig.update_xaxes(range=[30, 70], title="Frekuensi (Hz)")
-        fig.update_yaxes(range=[-40, 60], title="Amplitude (dB)")
-        fig.add_vline(x=50, line_dash="dash", line_color="green", annotation_text="50Hz")
-        if severity > 2:
-            fig.add_vline(x=45, line_dash="dot", line_color="red")
-            fig.add_vline(x=55, line_dash="dot", line_color="red")
-        st.plotly_chart(fig, use_container_width=True)
+# --- GENERATE DATA UTAMA ---
+fs = 2000
+t, signal_total = generate_signal(fault_type, severity, noise_level, duration=0.2, fs=fs) # Durasi pendek untuk zoom view
+_, signal_full = generate_signal(fault_type, severity, noise_level, duration=1.0, fs=fs) # Durasi panjang untuk FFT akurat
 
-# =========================================
-# TAB 2: MODE ANALISA (Upload CSV)
-# =========================================
-with tab2:
-    st.write("Upload data rekaman dari alat ukur (Time Series Data).")
-    uploaded_file = st.file_uploader("Pilih file CSV", type=["csv", "txt"])
-    if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file, header=None)
-            data_signal = df.iloc[:, 0].values
-            xf_real, y_db_real = perform_esa_analysis(data_signal, 2000) # Asumsi FS 2000
+# Analisa FFT
+xf, y_db = perform_esa_analysis(signal_full, fs)
+
+# --- VISUALISASI ---
+col1, col2 = st.columns([1, 1])
+
+# GRAFIK 1: TIME DOMAIN (BENTUK GELOMBANG)
+with col1:
+    st.subheader("1. Time Domain (Bentuk Gelombang)")
+    fig_time = go.Figure()
+    fig_time.add_trace(go.Scatter(x=t, y=signal_total, mode='lines', name='Arus', line=dict(color='#00CC96')))
+    
+    # Anotasi Edukasi Time Domain
+    if "Harmonics" in fault_type and severity > 3:
+        st.caption("Perhatikan: Gelombang tidak lagi sinus mulus, tapi 'penyok' akibat harmonisa.")
+    elif "Bearing" in fault_type and severity > 3:
+        st.caption("Perhatikan: Gelombang terlihat kasar/berbulu akibat getaran bearing.")
+    else:
+        st.caption("Gelombang arus listrik (Zoom 0.2 detik).")
+        
+    fig_time.update_layout(height=400, xaxis_title="Waktu (s)", yaxis_title="Amper (A)")
+    st.plotly_chart(fig_time, use_container_width=True)
+
+# GRAFIK 2: FREQUENCY DOMAIN (SPEKTRUM ESA)
+with col2:
+    st.subheader("2. Frequency Domain (Diagnosa)")
+    fig_fft = go.Figure()
+    fig_fft.add_trace(go.Scatter(x=xf, y=y_db, mode='lines', name='Spectrum', line=dict(color='#EF553B')))
+    
+    # Marker 50Hz
+    fig_fft.add_vline(x=50, line_dash="dash", line_color="green", annotation_text="50Hz")
+    
+    # Logika Zoom & Marker berdasarkan Fault Type
+    if "Rotor" in fault_type:
+        st.caption("Diagnosa: Perhatikan **Sidebands** kembar yang muncul mengapit 50Hz.")
+        fig_fft.update_xaxes(range=[30, 70]) # Zoom dekat
+        if severity > 1:
+            fig_fft.add_vline(x=45, line_dash="dot", line_color="red", annotation_text="L-Side")
+            fig_fft.add_vline(x=55, line_dash="dot", line_color="red", annotation_text="R-Side")
             
-            fig_real = go.Figure()
-            fig_real.add_trace(go.Scatter(x=xf_real, y=y_db_real, name='Real Data'))
-            fig_real.update_layout(title="Hasil Analisa File", xaxis_title="Hz", yaxis_title="dB")
-            fig_real.update_xaxes(range=[0, 100])
-            st.plotly_chart(fig_real, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error: {e}")
+    elif "Bearing" in fault_type:
+        st.caption("Diagnosa: Perhatikan frekuensi gangguan mekanis (biasanya lebih lebar dari sideband rotor).")
+        fig_fft.update_xaxes(range=[0, 100]) # Zoom medium
+        if severity > 1:
+            fig_fft.add_vline(x=30, line_dash="dot", line_color="orange", annotation_text="Bearing Freq")
+            fig_fft.add_vline(x=70, line_dash="dot", line_color="orange", annotation_text="Bearing Freq")
 
-# =========================================
-# TAB 3: REAL-TIME MONITOR (Live Demo)
-# =========================================
-with tab3:
-    st.markdown("### 🔴 Live Monitoring Dashboard")
-    st.caption("Mensimulasikan pengambilan data sensor secara terus menerus (Streaming).")
-    
-    col_live_ctrl, col_live_view = st.columns([1, 4])
-    
-    with col_live_ctrl:
-        # Tombol Start/Stop
-        run = st.toggle('Mulai Monitoring', value=False)
-        
-        st.divider()
-        st.markdown("**Status Sensor:**")
-        if run:
-            st.success("CONNECTED (Data Streaming)")
-        else:
-            st.warning("DISCONNECTED")
+    elif "Harmonics" in fault_type:
+        st.caption("Diagnosa: Perhatikan munculnya tiang di kelipatan 50Hz (150Hz, 250Hz).")
+        fig_fft.update_xaxes(range=[0, 300]) # Zoom jauh (Wideband)
+        if severity > 1:
+            fig_fft.add_vline(x=150, line_dash="dot", line_color="purple", annotation_text="3rd Harm")
+            fig_fft.add_vline(x=250, line_dash="dot", line_color="purple", annotation_text="5th Harm")
             
-        st.markdown("**Inject Fault (Realtime):**")
-        # Slider ini bisa digeser SAAT grafik berjalan!
-        live_severity = st.slider("Simulasi Kerusakan Tiba-tiba", 0.0, 10.0, 0.0, key="live_sev")
-        
-    with col_live_view:
-        # Placeholder untuk grafik yang akan di-update terus menerus
-        chart_placeholder = st.empty()
-        metric_placeholder = st.empty()
-        
-        # Loop Realtime
-        if run:
-            while True:
-                # 1. GENERATE DATA BARU (Disini nanti diganti baca USB Serial)
-                # ---------------------------------------------------------
-                # Simulasi gelombang berjalan (Phase shift)
-                now = time.time()
-                t_live = np.linspace(now, now + 1.0, 2000, endpoint=False)
-                
-                # Sinyal Dasar 50Hz
-                live_sig = 100 * np.sin(2 * np.pi * 50 * t_live)
-                
-                # Sinyal Kerusakan (Dikontrol slider kiri)
-                live_fault = (live_severity * 3) * np.sin(2 * np.pi * 45 * t_live) + \
-                             (live_severity * 3) * np.sin(2 * np.pi * 55 * t_live)
-                
-                # Noise random agar terlihat seperti sensor asli
-                live_noise = np.random.normal(0, 2.0, 2000)
-                
-                current_signal = live_sig + live_fault + live_noise
-                # ---------------------------------------------------------
-                
-                # 2. PROSES FFT CEPAT
-                xf_live, y_db_live = perform_esa_analysis(current_signal, 2000)
-                
-                # 3. UPDATE GRAFIK
-                with chart_placeholder.container():
-                    fig_live = go.Figure()
-                    
-                    # Grafik Spektrum
-                    fig_live.add_trace(go.Scatter(
-                        x=xf_live, y=y_db_live, 
-                        mode='lines', 
-                        line=dict(color='#00CC96', width=1),
-                        name='Live Spectrum'
-                    ))
-                    
-                    # Limit area agar grafik tidak loncat-loncat
-                    fig_live.update_xaxes(range=[30, 70])
-                    fig_live.update_yaxes(range=[-40, 60])
-                    fig_live.update_layout(
-                        title=f"Live Spectrum Analysis (Last Update: {time.strftime('%H:%M:%S')})",
-                        height=450,
-                        margin=dict(l=20, r=20, t=40, b=20)
-                    )
-                    
-                    # Indikator Alarm Visual
-                    fig_live.add_vline(x=50, line_dash="dash", line_color="gray")
-                    if live_severity > 3:
-                        fig_live.add_shape(type="rect",
-                            x0=44, y0=-40, x1=46, y1=60,
-                            fillcolor="red", opacity=0.1, line_width=0,
-                        )
-                        fig_live.add_shape(type="rect",
-                            x0=54, y0=-40, x1=56, y1=60,
-                            fillcolor="red", opacity=0.1, line_width=0,
-                        )
-                        
-                    st.plotly_chart(fig_live, use_container_width=True)
-                
-                # 4. UPDATE METRICS
-                with metric_placeholder.container():
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Frequency", "50.01 Hz", "0.01%")
-                    c2.metric("RMS Current", f"{98 + np.random.rand():.1f} A", "Normal")
-                    status = "CRITICAL" if live_severity > 5 else "NORMAL"
-                    c3.metric("Motor Health", status, delta_color="inverse" if status=="CRITICAL" else "normal")
+    else: # Sehat
+        st.caption("Diagnosa: Spektrum bersih. Hanya ada satu puncak dominan di 50Hz.")
+        fig_fft.update_xaxes(range=[0, 100])
 
-                # Delay agar tidak crash browser (simulasi refresh rate sensor)
-                time.sleep(0.5) 
-                
-                # Logic breaker: Stop loop jika tombol dimatikan
-                # (Streamlit akan rerun script saat tombol ditekan, memutus while loop)
-        else:
-            st.info("Klik tombol 'Mulai Monitoring' untuk mengaktifkan sensor.")
+    fig_fft.update_yaxes(range=[-40, 80], title="Amplitude (dB)")
+    fig_fft.update_layout(height=400, xaxis_title="Frekuensi (Hz)")
+    st.plotly_chart(fig_fft, use_container_width=True)
+
+# --- PENJELASAN TEKNIS (Expandable) ---
+with st.expander("📘 Penjelasan Teknis & Rumus Diagnosa"):
+    st.markdown("""
+    ### Panduan Membaca Grafik
+    
+    **1. Motor Sehat (Healthy)**
+    * **Grafik:** Bersih, hanya ada satu tiang tinggi di **50Hz**.
+    * **Arti:** Listrik murni, motor berputar presisi.
+    
+    **2. Broken Rotor Bar**
+    * **Grafik:** Muncul "pengawal" kecil di kiri-kanan 50Hz (misal 45Hz & 55Hz).
+    * **Rumus:** $F_{sideband} = F_{line} \pm (2 \times Slip)$.
+    * **Bahaya:** Rotor panas berlebih, bisa melukai stator (konslet).
+    
+    **3. Bearing Fault**
+    * **Grafik:** Muncul frekuensi aneh (bukan kelipatan 50) atau noise lantai naik.
+    * **Fisika:** Bola bearing yang cacat memukul dinding race, memodulasi celah udara.
+    * **Bahaya:** Motor macet (jammed), as patah.
+    
+    **4. Harmonics (Kualitas Daya)**
+    * **Grafik:** Muncul tiang di 150Hz (Harmonisa ke-3), 250Hz (ke-5), dst.
+    * **Fisika:** Akibat beban non-linear (VSD, Lampu LED besar, Rectifier).
+    * **Bahaya:** Motor cepat panas (overheat) meski beban ringan.
+    """)
