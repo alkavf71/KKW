@@ -5,232 +5,217 @@ import plotly.graph_objects as go
 from scipy.fft import fft, fftfreq
 
 # ==========================================
-# 1. ALGORITMA CERDAS (VSD SUPPORT + BUG FIX)
+# 1. ALGORITMA ESA (VOLTAGE + CURRENT)
 # ==========================================
-def analyze_and_diagnose(signal_data, fs):
-    # A. Lakukan FFT
-    N = len(signal_data)
-    yf = fft(signal_data)
-    xf = fftfreq(N, 1 / fs)
+def analyze_esa_industrial(voltage, current, fs):
+    N = len(voltage)
     
-    # Ambil sisi positif
-    xf = xf[:N//2]
-    amplitude = 2.0/N * np.abs(yf[0:N//2])
-    # Hindari log(0) dengan menambah epsilon kecil
-    amplitude_db = 20 * np.log10(amplitude + 1e-9)
+    # --- STEP A: ANALISA SIGNAL DASAR ---
+    # Hitung RMS
+    v_rms = np.sqrt(np.mean(voltage**2))
+    i_rms = np.sqrt(np.mean(current**2))
     
-    # B. SMART TRACKING (Cari Frekuensi VSD)
-    # Scan area operasi wajar (10Hz - 80Hz)
-    scan_min_hz = 10
-    scan_max_hz = 80
+    # Hitung Daya (Instantaneous Power)
+    # p(t) = v(t) * i(t) -> Teknik paling ampuh di ESA
+    power_signal = voltage * current
     
-    mask_scan = (xf >= scan_min_hz) & (xf <= scan_max_hz)
-    idx_scan = np.where(mask_scan)[0]
+    # --- STEP B: FFT PROCESSSING ---
+    # Kita lakukan FFT pada sinyal Arus (untuk MCSA) DAN sinyal Tegangan
     
-    if len(idx_scan) > 0:
-        idx_peak_local = np.argmax(amplitude_db[idx_scan])
-        idx_peak = idx_scan[idx_peak_local] 
-        freq_fund = xf[idx_peak]
-        amp_fund = amplitude_db[idx_peak]
-    else:
-        freq_fund = 50.0
-        amp_fund = -100
-        idx_peak = np.argmin(np.abs(xf - 50))
+    # Fungsi FFT Helper
+    def get_spectrum(signal):
+        yf = fft(signal)
+        xf = fftfreq(N, 1 / fs)
+        xf = xf[:N//2]
+        amp = 2.0/N * np.abs(yf[0:N//2])
+        db = 20 * np.log10(amp + 1e-9)
+        return xf, db, amp
 
-    # C. Cek Sidebands (Dynamic Tracking) - DENGAN SAFETY BOUNDS
-    target_sb_left = freq_fund - 5 
-    # Pastikan target tidak negatif
-    if target_sb_left < 0: target_sb_left = 0
+    xf, v_db, v_amp = get_spectrum(voltage)
+    _, i_db, i_amp = get_spectrum(current)
     
-    idx_sb_left = np.argmin(np.abs(xf - target_sb_left))
+    # --- STEP C: SMART TRACKING (Cari Frekuensi Tegangan) ---
+    # Tegangan adalah referensi paling stabil
+    idx_peak_v = np.argmax(v_amp) 
+    freq_fund = xf[idx_peak_v]
     
-    # [FIX] Safety Bounds untuk Slicing Array
-    search_width = 50 
-    low_bound_sb = max(0, idx_sb_left - search_width)
-    high_bound_sb = min(len(amplitude_db), idx_sb_left + search_width)
-    
-    # Pastikan range valid
-    if high_bound_sb > low_bound_sb:
-        idx_peak_sb = low_bound_sb + np.argmax(amplitude_db[low_bound_sb : high_bound_sb])
-        amp_sb = amplitude_db[idx_peak_sb]
-        freq_sb = xf[idx_peak_sb]
-    else:
-        amp_sb = -100 # Nilai dummy jika range invalid
-        freq_sb = 0
-
-    # D. Cek Harmonisa (Dynamic Tracking) - DENGAN SAFETY BOUNDS
-    target_h3 = freq_fund * 3
-    idx_h3 = np.argmin(np.abs(xf - target_h3))
-    
-    # [FIX] Safety Bounds untuk Harmonisa
-    low_bound_h3 = max(0, idx_h3 - search_width)
-    high_bound_h3 = min(len(amplitude_db), idx_h3 + search_width)
-    
-    if high_bound_h3 > low_bound_h3:
-        idx_peak_h3 = low_bound_h3 + np.argmax(amplitude_db[low_bound_h3 : high_bound_h3])
-        amp_h3 = amplitude_db[idx_peak_h3]
-    else:
-        amp_h3 = -100
-
-    # --- LOGIKA KEPUTUSAN (RULE BASED) ---
+    # --- STEP D: DIAGNOSA LANJUTAN (Korelasi V & I) ---
     diagnosis = []
     status = "NORMAL"
     
-    # Rule 1: Rotor Bar Check
-    diff_rotor = amp_fund - amp_sb
-    # Threshold 30dB, tapi pastikan freq_sb tidak nempel freq_fund (min beda 1Hz)
-    if diff_rotor < 30 and abs(freq_fund - freq_sb) > 1.0: 
-        status = "CRITICAL"
-        diagnosis.append(f"⚠️ **BROKEN ROTOR BAR** terdeteksi! (Sideband di {freq_sb:.1f} Hz terlalu tinggi)")
+    # 1. Cek Kualitas Tegangan (Supply Side)
+    # Cari noise di tegangan (Harmonisa tegangan)
+    v_thd_est = (np.sum(v_amp) - v_amp[idx_peak_v]) / v_amp[idx_peak_v] * 100
     
-    # Rule 2: Power Quality
-    diff_harm = amp_fund - amp_h3
-    if diff_harm < 50:
-        if status != "CRITICAL": status = "WARNING"
-        diagnosis.append(f"⚠️ **POWER QUALITY ISSUE** (Harmonisa ke-3 tinggi)")
+    if v_thd_est > 5.0: # Standar IEEE 519 (Voltage distortion > 5%)
+        status = "WARNING"
+        diagnosis.append(f"⚠️ **SUPPLY ISSUE:** Kualitas Tegangan Buruk (Distorsi {v_thd_est:.1f}%). Masalah ada di Genset/Trafo, bukan Motor.")
+    
+    # 2. Cek Rotor (Load Side)
+    # Cari Sideband di ARUS
+    target_sb = freq_fund - 5 # Asumsi slip
+    idx_sb = np.argmin(np.abs(xf - target_sb))
+    
+    # Ambil peak sideband di arus
+    search_w = 50
+    low = max(0, idx_sb-search_w)
+    high = min(len(i_db), idx_sb+search_w)
+    idx_peak_sb_i = low + np.argmax(i_db[low:high])
+    
+    diff_rotor = i_db[idx_peak_v] - i_db[idx_peak_sb_i]
+    
+    # Logika Cerdas: Apakah tegangan juga punya sideband sama?
+    # Jika Tegangan bersih, tapi Arus kotor -> Fix Motor Rusak
+    # Jika Tegangan kotor, dan Arus kotor -> Suplai yang salah
+    
+    idx_peak_sb_v = low + np.argmax(v_db[low:high])
+    diff_voltage_noise = v_db[idx_peak_v] - v_db[idx_peak_sb_v]
+    
+    if diff_rotor < 35: # Indikasi kerusakan di arus kuat
+        if diff_voltage_noise > 50: 
+            # Tegangan bersih (beda jauh), Arus kotor (beda dikit)
+            status = "CRITICAL"
+            diagnosis.append(f"⚠️ **MOTOR FAULT:** Broken Rotor Bar Terdeteksi! (Suplai listrik bersih, tapi arus motor cacat).")
+        else:
+            # Tegangan juga kotor
+            if status != "CRITICAL": status = "WARNING"
+            diagnosis.append(f"⚠️ **FALSE ALARM:** Terdeteksi fluktuasi arus, TAPI tegangan juga berfluktuasi. Kemungkinan beban sumber tidak stabil.")
 
     if status == "NORMAL":
-        diagnosis.append(f"✅ Motor Beroperasi Normal pada {freq_fund:.1f} Hz.")
+        diagnosis.append("✅ Sistem Sehat. Kualitas Daya & Kondisi Motor Prima.")
 
-    return xf, amplitude_db, status, diagnosis, freq_fund
+    return xf, v_db, i_db, freq_fund, v_rms, i_rms, status, diagnosis
 
 # ==========================================
-# 2. GENERATOR CSV (VSD CAPABLE)
+# 2. GENERATOR DUAL CHANNEL (V + I)
 # ==========================================
-def create_vsd_csv(condition, frequency):
+def create_esa_csv(scenario):
     fs = 2000
     duration = 2.0
     t = np.linspace(0.0, duration, int(fs*duration), endpoint=False)
     
-    sig = 100 * np.sin(2 * np.pi * frequency * t)
+    # --- SINYAL TEGANGAN (VOLTAGE) ---
+    # Biasanya tegangan PLN relatif bersih (Sinus Murni)
+    voltage = 220 * np.sqrt(2) * np.sin(2 * np.pi * 50 * t) # 220V RMS
     
-    filename = f"VSD_{int(frequency)}Hz_Sehat.csv"
+    # --- SINYAL ARUS (CURRENT) ---
+    # Arus tertinggal (lagging) dari tegangan karena sifat induktif motor
+    phase_lag = np.pi / 4 # 45 derajat
+    current = 100 * np.sqrt(2) * np.sin(2 * np.pi * 50 * t - phase_lag)
     
-    if condition == "Rusak (Rotor)":
-        sig += 4.5 * np.sin(2 * np.pi * (frequency - 5) * t)
-        sig += 4.5 * np.sin(2 * np.pi * (frequency + 5) * t)
-        sig += np.random.normal(0, 0.3, len(t))
-        filename = f"VSD_{int(frequency)}Hz_Rusak.csv"
-    else:
-        sig += np.random.normal(0, 0.1, len(t))
+    filename = "ESA_Normal.csv"
+    
+    if scenario == "Motor Rusak (Rotor)":
+        # Tegangan TETAP BERSIH (Karena suplai bagus)
+        voltage += np.random.normal(0, 0.5, len(t))
         
-    df = pd.DataFrame(sig)
+        # Arus KOTOR (Ada sideband kerusakan)
+        current += 5 * np.sin(2 * np.pi * 45 * t - phase_lag)
+        current += 5 * np.sin(2 * np.pi * 55 * t - phase_lag)
+        current += np.random.normal(0, 0.5, len(t))
+        filename = "ESA_MotorRusak.csv"
+        
+    elif scenario == "Supply Jelek (Genset Hunting)":
+        # Tegangan KOTOR (Ada modulasi frekuensi rendah)
+        modulasi = 10 * np.sin(2 * np.pi * 5 * t)
+        voltage += modulasi # Tegangan naik turun
+        
+        # Arus IKUT KOTOR (Karena tegangan naik turun, arus pasti ikut)
+        current += (modulasi / 2) # Arus ikut terpengaruh
+        voltage += np.random.normal(0, 2.0, len(t))
+        current += np.random.normal(0, 1.0, len(t))
+        filename = "ESA_SupplyJelek.csv"
+        
+    else: # Normal
+        voltage += np.random.normal(0, 0.2, len(t))
+        current += np.random.normal(0, 0.2, len(t))
+
+    # Gabungkan jadi 2 Kolom (Voltage, Current)
+    df = pd.DataFrame({'Voltage': voltage, 'Current': current})
     return df.to_csv(index=False, header=False), filename
 
 # ==========================================
-# 3. USER INTERFACE (STREAMLIT)
+# 3. INTERFACE STREAMLIT
 # ==========================================
-st.set_page_config(layout="wide", page_title="ESA VSD Analyzer")
+st.set_page_config(layout="wide", page_title="Industrial ESA")
 
-col_logo, col_title = st.columns([1, 5])
-with col_title:
-    st.title("⚡ ESA Analyzer Pro (VSD Ready)")
-    st.markdown("**Infrastructure Management - Pertamina Patra Niaga**")
-    st.caption("Support Direct Online (50Hz) & Variable Speed Drive (20-60Hz)")
+st.title("🏭 True ESA System (Voltage + Current)")
+st.markdown("**Infrastructure Management - Pertamina Patra Niaga**")
+st.markdown("Analisis korelasi Tegangan (Suplai) dan Arus (Beban) untuk diagnosa presisi.")
 
+# --- SIDEBAR GENERATOR ---
+st.sidebar.header("1. Generator Data (2-Channel)")
+st.sidebar.info("Data CSV ini sekarang berisi 2 kolom: Tegangan (V) & Arus (A).")
+
+csv_norm, n_norm = create_esa_csv("Normal")
+st.sidebar.download_button("⬇️ Download: Normal", csv_norm, n_norm, "text/csv")
+
+csv_fault, n_fault = create_esa_csv("Motor Rusak (Rotor)")
+st.sidebar.download_button("⬇️ Download: Motor Rusak", csv_fault, n_fault, "text/csv")
+
+csv_sup, n_sup = create_esa_csv("Supply Jelek (Genset Hunting)")
+st.sidebar.download_button("⬇️ Download: Supply Problem", csv_sup, n_sup, "text/csv")
+
+# --- MAIN UPLOAD ---
 st.divider()
+uploaded_file = st.file_uploader("Upload CSV ESA (Format: Col1=Volt, Col2=Amp)", type=["csv", "txt"])
 
-tab1, tab2 = st.tabs(["🎛️ Simulasi VSD Live", "📂 Analisa File (Upload)"])
-
-# TAB 1: SIMULASI LIVE VSD
-with tab1:
-    col_sim_ctrl, col_sim_view = st.columns([1, 3])
-    
-    with col_sim_ctrl:
-        st.subheader("Panel Kontrol VSD")
-        st.info("Atur frekuensi output VSD untuk melihat kemampuan 'Tracking' alat ini.")
+if uploaded_file:
+    try:
+        # Baca CSV (Harus 2 Kolom)
+        df = pd.read_csv(uploaded_file, header=None)
         
-        vsd_freq = st.slider("Frekuensi VSD (Hz)", 20.0, 60.0, 50.0, step=0.5)
-        
-        st.markdown("---")
-        sim_fault = st.checkbox("Inject Kerusakan Rotor")
-        sim_noise = st.slider("Level Noise", 0.0, 1.0, 0.1)
-        
-    with col_sim_view:
-        fs_sim = 2000
-        t_sim = np.linspace(0, 1.0, fs_sim, endpoint=False)
-        sig_sim = 100 * np.sin(2 * np.pi * vsd_freq * t_sim)
-        
-        if sim_fault:
-            sig_sim += 5 * np.sin(2 * np.pi * (vsd_freq - 5) * t_sim)
-            sig_sim += 5 * np.sin(2 * np.pi * (vsd_freq + 5) * t_sim)
-        
-        sig_sim += np.random.normal(0, sim_noise, len(t_sim))
-        
-        # Panggil fungsi yang sudah di-fix
-        xf_sim, y_db_sim, stat_sim, _, detected_freq = analyze_and_diagnose(sig_sim, fs_sim)
-        
-        st.subheader(f"Monitoring Real-time (Detected: {detected_freq:.2f} Hz)")
-        
-        fig_sim = go.Figure()
-        fig_sim.add_trace(go.Scatter(x=xf_sim, y=y_db_sim, name='Spectrum', line=dict(color='#00CC96')))
-        
-        fig_sim.add_vline(x=detected_freq, line_dash="dash", line_color="white", annotation_text=f"Fund: {detected_freq:.1f}Hz")
-        
-        if sim_fault:
-            fig_sim.add_vline(x=detected_freq-5, line_dash="dot", line_color="red", annotation_text="SB")
-            fig_sim.add_vline(x=detected_freq+5, line_dash="dot", line_color="red", annotation_text="SB")
-            st.error("⚠️ CRITICAL: Broken Rotor Bar Pattern Detected")
+        if df.shape[1] < 2:
+            st.error("⚠️ File harus memiliki minimal 2 kolom (Voltage & Current). Ini sistem ESA, bukan MCSA.")
         else:
-            st.success("✅ NORMAL OPERATION")
+            volts = df.iloc[:, 0].values
+            amps = df.iloc[:, 1].values
             
-        fig_sim.update_layout(xaxis_title="Frekuensi (Hz)", yaxis_title="dB", height=450)
-        # Limit zoom minimum 0 agar tidak error
-        zoom_min = max(0, vsd_freq-20)
-        fig_sim.update_xaxes(range=[zoom_min, vsd_freq+20])
-        st.plotly_chart(fig_sim, use_container_width=True)
+            # PROSES ANALISA
+            xf, v_db, i_db, freq, v_rms, i_rms, status, diags = analyze_esa_industrial(volts, amps, 2000)
+            
+            # --- DASHBOARD HASIL ---
+            # 1. KARTU STATUS
+            c1, c2, c3 = st.columns([1, 1, 2])
+            c1.metric("Tegangan (RMS)", f"{v_rms:.1f} V")
+            c2.metric("Arus (RMS)", f"{i_rms:.1f} A")
+            
+            color = "green" if status == "NORMAL" else "red" 
+            if status == "WARNING": color = "orange"
+            
+            with c3:
+                st.markdown(f"<h2 style='color:{color};'>STATUS: {status}</h2>", unsafe_allow_html=True)
+                for d in diags:
+                    if "✅" in d: st.success(d)
+                    elif "⚠️" in d: st.warning(d) if status == "WARNING" else st.error(d)
 
-# TAB 2: UPLOAD & ANALISA
-with tab2:
-    st.sidebar.header("📥 Generator Data CSV")
-    
-    gen_freq = st.sidebar.number_input("Set Frekuensi Data (Hz)", 20, 60, 42)
-    
-    csv_vsd_sehat, n_sehat = create_vsd_csv("Sehat", gen_freq)
-    st.sidebar.download_button(f"⬇️ Download Sehat ({gen_freq}Hz)", csv_vsd_sehat, n_sehat, "text/csv")
-    
-    csv_vsd_rusak, n_rusak = create_vsd_csv("Rusak (Rotor)", gen_freq)
-    st.sidebar.download_button(f"⬇️ Download Rusak ({gen_freq}Hz)", csv_vsd_rusak, n_rusak, "text/csv")
-    
-    st.markdown("### Upload Data Lapangan (Support VSD)")
-    uploaded_file = st.file_uploader("Pilih File CSV", type=["csv", "txt"])
-    
-    if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file, header=None)
-            data_signal = df.iloc[:, 0].values
-            
-            xf, y_db, status, diagnosis_list, freq_fund = analyze_and_diagnose(data_signal, 2000)
-            
+            # 2. GRAFIK PERBANDINGAN V vs I
             st.divider()
-            col_res1, col_res2 = st.columns([1,3])
+            st.subheader("🔍 Analisa Sumber Masalah (Source vs Load)")
             
-            with col_res1:
-                color = "green" if status == "NORMAL" else "red"
-                st.markdown(f"""
-                <div style="border: 2px solid {color}; padding: 15px; border-radius: 10px; text-align: center;">
-                    <h1 style="color:{color}; margin:0;">{freq_fund:.1f} Hz</h1>
-                    <p>Detected Frequency</p>
-                    <h3 style="color:{color};">{status}</h3>
-                </div>
-                """, unsafe_allow_html=True)
+            tab_graph1, tab_graph2 = st.tabs(["Spektrum Gabungan (V & I)", "Waveform Asli"])
+            
+            with tab_graph1:
+                fig = go.Figure()
+                # Plot Arus (Beban)
+                fig.add_trace(go.Scatter(x=xf, y=i_db, name='Arus (Motor)', line=dict(color='blue')))
+                # Plot Tegangan (Suplai) - Transparan dikit
+                fig.add_trace(go.Scatter(x=xf, y=v_db, name='Tegangan (PLN/Genset)', line=dict(color='orange', dash='dot')))
                 
-            with col_res2:
-                st.markdown("#### Detail Diagnosa:")
-                for d in diagnosis_list:
-                    if "⚠️" in d: st.error(d)
-                    else: st.success(d)
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=xf, y=y_db, name='Spectrum'))
-            fig.add_vline(x=freq_fund, line_dash="dash", line_color="green", annotation_text="Detected")
-            
-            peak = np.max(y_db)
-            fig.add_hline(y=peak-30, line_dash="dot", line_color="red", annotation_text="Threshold (-30dB)")
-            
-            fig.update_layout(height=500, xaxis_title="Frekuensi (Hz)", yaxis_title="dB")
-            fig.update_xaxes(range=[0, 100])
-            st.plotly_chart(fig, use_container_width=True)
-            
-        except Exception as e:
-            st.error(f"Error: {e}")
+                fig.update_layout(title="Apakah Tegangan ikut kotor?", xaxis_title="Hz", yaxis_title="dB", height=500)
+                fig.update_xaxes(range=[freq-20, freq+20]) # Zoom ke fundamental
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption("Tips: Jika Garis Biru (Arus) muncul paku sideband, tapi Garis Oranye (Tegangan) mulus rata, berarti kerusakan dari MOTOR.")
+
+            with tab_graph2:
+                # Tampilkan cuplikan gelombang 0.1 detik
+                limit = 200 # 2000Hz * 0.1s
+                fig_wave = go.Figure()
+                # Normalisasi agar bisa digambar bareng (V dibagi 2 supaya skalanya mirip I)
+                fig_wave.add_trace(go.Scatter(y=volts[:limit], name='Voltage (V)', line=dict(color='orange')))
+                fig_wave.add_trace(go.Scatter(y=amps[:limit]*2, name='Current (x2)', line=dict(color='blue'))) 
+                fig_wave.update_layout(title="Bentuk Gelombang (0.1 detik pertama)", height=400)
+                st.plotly_chart(fig_wave, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error pembacaan file: {e}")
