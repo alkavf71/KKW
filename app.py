@@ -1,190 +1,156 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from scipy import signal
-import tensorflow as tf
-from tensorflow.keras import layers, models
+import scipy.fftpack
+from scipy.signal import find_peaks, windows
+import plotly.graph_objects as go
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(
-    page_title="Bearing Fault Diagnosis - Lite CNN",
-    layout="wide"
-)
+# --- Konfigurasi Halaman ---
+st.set_page_config(page_title="MCSA Analyzer", layout="wide")
 
-# --- JUDUL DAN PENJELASAN ---
-st.title("🔧 Lite CNN: Bearing Fault Diagnosis")
+st.title("🔩 Motor Current Signature Analysis (MCSA) Tool")
 st.markdown("""
-Aplikasi ini mengimplementasikan konsep dari jurnal **MDPI Sensors 2023, 23(6), 3157**.
-Sistem mendiagnosa kerusakan bantalan mesin (bearing) menggunakan **Spectrogram** dan **Lite CNN**.
+Aplikasi ini mengimplementasikan prinsip dasar dari jurnal *Review of Motor Current Signature Analysis*.
+Metode utama: **Fast Fourier Transform (FFT)** untuk mendeteksi frekuensi kerusakan (sidebands) di sekitar frekuensi fundamental (Line Frequency).
 """)
 
-# --- FUNGSI UTILITAS ---
+# --- Sidebar: Konfigurasi ---
+st.sidebar.header("1. Input Data")
+data_source = st.sidebar.radio("Sumber Data:", ("Gunakan Data Dummy (Simulasi)", "Upload File CSV"))
 
-def generate_spectrogram(data, fs=12000):
-    """
-    Mengubah sinyal getaran 1D menjadi Spectrogram 2D.
-    Sesuai jurnal: Menggunakan STFT.
-    """
-    f, t, Sxx = signal.spectrogram(data, fs, nperseg=256, noverlap=128)
-    # Log scale untuk visualisasi yang lebih baik
-    Sxx_log = 10 * np.log10(Sxx + 1e-10) 
-    return f, t, Sxx_log
+# Parameter Global
+fs = st.sidebar.number_input("Sampling Frequency (Hz)", value=1000, min_value=100, help="Frekuensi pengambilan data sensor")
+line_freq = st.sidebar.number_input("Line Frequency (Hz)", value=50.0, step=10.0, help="Frekuensi jala-jala listrik (biasanya 50Hz atau 60Hz)")
 
-def create_lite_cnn_model(input_shape):
-    """
-    Membangun arsitektur Lite CNN sesuai konsep jurnal.
-    Struktur sederhana: Conv2D -> MaxPool -> Flatten -> Dense
-    """
-    model = models.Sequential([
-        layers.Input(shape=input_shape),
+# --- Fungsi Generate Data Dummy ---
+def generate_dummy_signal(fs, duration=2, fault=False):
+    t = np.linspace(0, duration, int(fs * duration), endpoint=False)
+    # Fundamental component (Line Frequency)
+    signal = 10 * np.sin(2 * np.pi * line_freq * t)
+    
+    # Noise
+    noise = np.random.normal(0, 0.5, size=len(t))
+    
+    signal = signal + noise
+    
+    if fault:
+        # Simulasi Broken Rotor Bar: Sidebands di sekitar fundamental
+        # f_sb = f_s (1 ± 2s) -> misal slip s=0.05
+        slip = 0.05
+        f_sb_left = line_freq * (1 - 2*slip) # 45 Hz
+        f_sb_right = line_freq * (1 + 2*slip) # 55 Hz
         
-        # Layer Konvolusi 1
-        layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
-        layers.MaxPooling2D((2, 2)),
+        # Tambahkan sinyal kecil di frekuensi sideband (amplitude lebih rendah)
+        signal += 0.8 * np.sin(2 * np.pi * f_sb_left * t)
+        signal += 0.8 * np.sin(2 * np.pi * f_sb_right * t)
         
-        # Layer Konvolusi 2
-        layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
-        layers.MaxPooling2D((2, 2)),
-        
-        # Layer Konvolusi 3 (Deep features)
-        layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
-        
-        # Klasifikasi
-        layers.Flatten(),
-        layers.Dense(64, activation='relu'),
-        layers.Dense(4, activation='softmax') # 4 Kelas: Normal, Inner, Outer, Ball
-    ])
-    return model
+    return t, signal
 
-# --- SIDEBAR INPUT ---
-st.sidebar.header("Input Data Getaran")
-input_option = st.sidebar.radio(
-    "Pilih Sumber Data:",
-    ("Gunakan Data Simulasi (Demo)", "Upload File CSV")
-)
+# --- Logika Load Data ---
+current_data = None
+time_data = None
 
-# --- MAIN LOGIC ---
-
-# 1. Load Data
-data = None
-fs = 12000  # Sampling rate standar CWRU dataset
-
-if input_option == "Gunakan Data Simulasi (Demo)":
-    # Membuat sinyal dummy (sinusoidal + noise) untuk demo
-    t = np.linspace(0, 1.0, fs)
-    # Simulasi kondisi random
-    condition = st.sidebar.selectbox("Pilih Simulasi Kondisi:", ["Normal", "Inner Race Fault", "Outer Race Fault"])
-    
-    noise = np.random.normal(0, 0.5, fs)
-    if condition == "Normal":
-        data = np.sin(2 * np.pi * 50 * t) + noise # Sinyal halus
-    elif condition == "Inner Race Fault":
-        data = np.sin(2 * np.pi * 50 * t) + 2 * np.sin(2 * np.pi * 120 * t) + noise # Ada frekuensi tinggi
-    else:
-        data = np.sin(2 * np.pi * 50 * t) + 3 * np.random.normal(0, 1, fs) * np.sin(2 * np.pi * 10 * t) # Impulsif
-        
-    st.info(f"Menggunakan data simulasi untuk kondisi: **{condition}**")
-
-elif input_option == "Upload File CSV":
-    uploaded_file = st.sidebar.file_uploader("Upload file CSV (1 kolom getaran)", type=["csv"])
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        # Ambil kolom pertama sebagai data getaran
-        data = df.iloc[:, 0].values
-        # Potong jika terlalu panjang agar ringan
-        if len(data) > fs:
-            data = data[:fs]
-            st.warning(f"Data dipotong menjadi {fs} sampel pertama.")
-
-# 2. Proses Data (Jika ada)
-if data is not None:
-    col1, col2 = st.columns(2)
-    
-    # Visualisasi Sinyal Waktu
-    with col1:
-        st.subheader("1. Sinyal Getaran (Time Domain)")
-        fig_time, ax_time = plt.subplots(figsize=(6, 4))
-        ax_time.plot(data, color='blue', linewidth=0.5)
-        ax_time.set_title("Raw Vibration Signal")
-        ax_time.set_xlabel("Time (samples)")
-        ax_time.set_ylabel("Amplitude")
-        st.pyplot(fig_time)
-
-    # Preprocessing: Spectrogram Generation
-    f, t_spec, Sxx = generate_spectrogram(data, fs)
-    
-    # Resize spectrogram agar sesuai input model (misal 64x64) secara sederhana untuk demo
-    # Dalam implementasi nyata, kita resize array Sxx menggunakan interpolasi
-    Sxx_resized = Sxx[:64, :64] # Cropping simplifikasi untuk demo
-    # Padding jika kurang
-    if Sxx_resized.shape != (64, 64):
-        pad_width = ((0, 64 - Sxx_resized.shape[0]), (0, 64 - Sxx_resized.shape[1]))
-        Sxx_resized = np.pad(Sxx, pad_width, mode='constant')[:64, :64]
-
-    with col2:
-        st.subheader("2. Spectrogram (Input Model)")
-        fig_spec, ax_spec = plt.subplots(figsize=(6, 4))
-        c = ax_spec.pcolormesh(t_spec, f, Sxx, shading='gouraud', cmap='inferno')
-        ax_spec.set_ylabel('Frequency [Hz]')
-        ax_spec.set_xlabel('Time [sec]')
-        ax_spec.set_title("Spectrogram (STFT)")
-        fig_spec.colorbar(c, ax=ax_spec)
-        st.pyplot(fig_spec)
-
-    # 3. Model Inference
-    st.divider()
-    st.subheader("3. Hasil Diagnosa (Lite CNN)")
-    
-    # Inisialisasi Model (Demo: Bobot acak karena tidak ada training)
-    # Di aplikasi nyata, Anda akan load model: model = tf.keras.models.load_model('model.h5')
-    model = create_lite_cnn_model(input_shape=(64, 64, 1))
-    
-    # Siapkan input shape (Batch, Height, Width, Channel)
-    input_tensor = Sxx_resized.reshape(1, 64, 64, 1)
-    
-    # Normalize
-    input_tensor = (input_tensor - np.min(input_tensor)) / (np.max(input_tensor) - np.min(input_tensor))
-
-    # Tombol Prediksi
-    if st.button("Jalankan Diagnosa"):
-        with st.spinner('Sedang memproses melalui layer CNN...'):
-            # Melakukan prediksi (Dummy prediction untuk demo struktur code)
-            # Karena model belum ditraining, kita akan memalsukan probabilitas 
-            # agar sesuai dengan input simulasi untuk menunjukkan logika output
-            
-            # --- LOGIKA DEMO ---
-            # Jika user memilih simulasi, kita paksa hasil agar sesuai.
-            # Jika upload, hasil akan random karena model untrained.
-            classes = ["Normal", "Inner Race Fault", "Outer Race Fault", "Ball Fault"]
-            
-            if input_option == "Gunakan Data Simulasi (Demo)":
-                # Mocking prediction based on sidebar choice
-                if "Normal" in condition: pred_idx = 0
-                elif "Inner" in condition: pred_idx = 1
-                elif "Outer" in condition: pred_idx = 2
-                else: pred_idx = 3
-                
-                # Buat probabilitas buatan
-                prediction = np.zeros((1, 4))
-                prediction[0, pred_idx] = 0.95
-                prediction[0, (pred_idx+1)%4] = 0.05
-            else:
-                # Real prediction (untrained model = random output)
-                prediction = model.predict(input_tensor)
-            
-            predicted_class = classes[np.argmax(prediction)]
-            confidence = np.max(prediction) * 100
-            
-            # Tampilkan Hasil
-            st.success(f"Status Mesin: **{predicted_class}**")
-            st.write(f"Confidence Level: **{confidence:.2f}%**")
-            
-            # Bar Chart Probabilitas
-            st.bar_chart(pd.DataFrame(prediction.T, index=classes, columns=["Probability"]))
-            
-            # Penjelasan Model Layer
-            st.expander("Lihat Arsitektur Model").write(model.summary())
+if data_source == "Gunakan Data Dummy (Simulasi)":
+    st.sidebar.subheader("Simulasi Kerusakan")
+    is_faulty = st.sidebar.checkbox("Simulasikan Motor Rusak (Sidebands)", value=True)
+    duration = st.sidebar.slider("Durasi Sinyal (detik)", 1, 10, 2)
+    time_data, current_data = generate_dummy_signal(fs, duration, is_faulty)
+    st.info(f"Menggunakan data simulasi ({'Rusak' if is_faulty else 'Sehat'}).")
 
 else:
-    st.info("Silakan pilih opsi input di sebelah kiri.")
+    uploaded_file = st.sidebar.file_uploader("Upload CSV (Kolom harus berisi data arus)", type=["csv"])
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        # Asumsi kolom pertama adalah data
+        try:
+            current_data = df.iloc[:, 0].values
+            # Buat array waktu berdasarkan sampling rate
+            time_data = np.arange(len(current_data)) / fs
+            st.success("File berhasil dimuat.")
+        except Exception as e:
+            st.error(f"Error membaca file: {e}")
+
+# --- Proses Analisis ---
+if current_data is not None:
+    # 1. Plot Time Domain
+    st.subheader("2. Time Domain Analysis")
+    fig_time = go.Figure()
+    fig_time.add_trace(go.Scatter(x=time_data[:1000], y=current_data[:1000], mode='lines', name='Current (Amp)'))
+    fig_time.update_layout(title="Waveform Arus (Zoomed - 1000 sample awal)", xaxis_title="Waktu (s)", yaxis_title="Amplitudo (A)")
+    st.plotly_chart(fig_time, use_container_width=True)
+
+    # 2. Proses FFT
+    st.subheader("3. Frequency Domain Analysis (FFT Spectrum)")
+    
+    # Mengurangi DC Offset
+    signal_ac = current_data - np.mean(current_data)
+    
+    # Menerapkan Windowing (Hanning) untuk mengurangi spectral leakage
+    N = len(signal_ac)
+    window = windows.hann(N)
+    signal_windowed = signal_ac * window
+    
+    # Hitung FFT
+    yf = scipy.fftpack.fft(signal_windowed)
+    xf = np.linspace(0.0, 1.0/(2.0*(1/fs)), N//2)
+    
+    # Normalisasi Amplitudo
+    amplitude = 2.0/N * np.abs(yf[:N//2])
+    
+    # Konversi ke Decibel (dB) - Standar MCSA
+    # Menghindari log(0)
+    amplitude_db = 20 * np.log10(amplitude + 1e-6)
+
+    # 3. Plot FFT
+    fig_fft = go.Figure()
+    fig_fft.add_trace(go.Scatter(x=xf, y=amplitude_db, mode='lines', name='Spectrum (dB)'))
+    
+    # Highlight Fundamental Frequency
+    fig_fft.add_vline(x=line_freq, line_width=2, line_dash="dash", line_color="green", annotation_text="Line Freq")
+
+    # Layout FFT
+    max_freq_view = st.sidebar.slider("Max Frequency View (Hz)", 0, int(fs/2), 100)
+    fig_fft.update_layout(
+        title="Power Spectral Density (MCSA Spectrum)",
+        xaxis_title="Frekuensi (Hz)",
+        yaxis_title="Amplitudo (dB)",
+        xaxis_range=[0, max_freq_view]
+    )
+    st.plotly_chart(fig_fft, use_container_width=True)
+
+    # 4. Analisis Sidebands (Otomatis)
+    st.markdown("### 4. Analisis Sidebands")
+    st.write("Berdasarkan jurnal, kerusakan rotor sering muncul sebagai sidebands di: $f_{sb} = f_s(1 \pm 2ks)$")
+    
+    # Cari peaks di sekitar frekuensi jala-jala
+    peaks, _ = find_peaks(amplitude, height=np.max(amplitude)*0.05) # Cari peak minimal 5% dari max
+    
+    found_peaks_df = pd.DataFrame({
+        "Frekuensi (Hz)": xf[peaks],
+        "Amplitudo (Linear)": amplitude[peaks],
+        "Amplitudo (dB)": amplitude_db[peaks]
+    })
+    
+    # Filter hanya peak di area visual
+    found_peaks_df = found_peaks_df[found_peaks_df["Frekuensi (Hz)"] <= max_freq_view]
+    found_peaks_df = found_peaks_df.sort_values(by="Amplitudo (Linear)", ascending=False).reset_index(drop=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Top Peaks Detected:**")
+        st.dataframe(found_peaks_df.head(5))
+    
+    with col2:
+        st.info("""
+        **Cara Membaca:**
+        1. Peak tertinggi haruslah **Line Frequency** (misal 50Hz).
+        2. Jika ada peak signifikan di kanan/kiri 50Hz (misal 45Hz dan 55Hz), itu indikasi **Broken Rotor Bar** atau masalah beban.
+        3. Gunakan skala **dB** untuk melihat perbedaan magnitude antara fundamental dan noise/fault.
+        """)
+
+else:
+    st.warning("Silakan pilih sumber data atau upload file CSV untuk memulai.")
+
+# Footer
+st.markdown("---")
+st.caption("Referensi: Brief Review of Motor Current Signature Analysis (ResearchGate). Code generated for Streamlit implementation.")
