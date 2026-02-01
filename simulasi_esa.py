@@ -37,7 +37,8 @@ st.markdown("---")
 defaults = {
     'vib_val': 1.2, 'noise_val': 75.0, 'temp_val': 60.0,
     'rpm_act': 1485, 'amp_act': 8.5,
-    'v_rs': 380, 'v_st': 380, 'v_tr': 380
+    # PERBAIKAN: Gunakan 380.0 (Float) bukan 380 (Int)
+    'v_rs': 380.0, 'v_st': 380.0, 'v_tr': 380.0 
 }
 
 for key, val in defaults.items():
@@ -73,9 +74,10 @@ st.sidebar.markdown("**Listrik (Multimeter 3-Phase)**")
 amp_act = st.sidebar.number_input("Ampere Rata-rata (A)", value=st.session_state['amp_act'], step=0.1)
 
 c_v1, c_v2, c_v3 = st.sidebar.columns(3)
-v_rs = c_v1.number_input("R-S", value=st.session_state['v_rs'], step=1)
-v_st = c_v2.number_input("S-T", value=st.session_state['v_st'], step=1)
-v_tr = c_v3.number_input("T-R", value=st.session_state['v_tr'], step=1)
+# PERBAIKAN: Ubah step=1 menjadi step=1.0
+v_rs = c_v1.number_input("R-S", value=st.session_state['v_rs'], step=1.0)
+v_st = c_v2.number_input("S-T", value=st.session_state['v_st'], step=1.0)
+v_tr = c_v3.number_input("T-R", value=st.session_state['v_tr'], step=1.0)
 
 # ==========================================
 # 5. OTAK ANALISIS (CALCULATION ENGINE)
