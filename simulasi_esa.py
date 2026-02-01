@@ -6,7 +6,7 @@ import streamlit as st
 st.set_page_config(
     page_title="Reliability Assistant Pro",
     layout="wide",
-    page_icon="🛡️🙏🏻",
+    page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
@@ -27,7 +27,7 @@ col_logo, col_title = st.columns([1, 6])
 with col_title:
     st.title("🛡️ Digital Reliability Assistant")
     st.markdown("#### Berdasarkan TKI No. C-017/F20500/2018-S9")
-    st.caption("Standard Reference: ISO 10816-3 | NEMA MG-1 | API 610 | ISO 15243")
+    st.caption("Engineered by Kafi | Standard Reference: ISO 10816-3 | NEMA MG-1 | API 610 | ISO 15243")
 
 st.markdown("---")
 
