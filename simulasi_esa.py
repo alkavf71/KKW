@@ -1,139 +1,185 @@
 import streamlit as st
-import numpy as np
-import plotly.graph_objects as go
-from scipy.fft import fft, fftfreq
-from scipy.signal import windows
-import serial
-import time
-import threading
 
-# --- Konfigurasi ---
-st.set_page_config(layout="wide", page_title="Real-Time ESA Monitor")
-st.title("⚡ Real-Time ESA Monitor (Live Sensor)")
+# --- KONFIGURASI HALAMAN ---
+st.set_page_config(page_title="Digital Reliability Assistant", layout="wide", page_icon="🛡️")
 
-# --- Sidebar: Koneksi Sensor ---
-st.sidebar.header("🔌 Koneksi Sensor (Serial/USB)")
+# --- HEADER RESMI ---
+col_logo, col_title = st.columns([1, 5])
+with col_title:
+    st.title("🛡️ Digital Reliability Assistant")
+    st.markdown("### Berdasarkan TKI No. C-017/F20500/2018-S9")
+    st.markdown("**Pelaksanaan Inspeksi Pompa Produk dan Penggerak**")
+    st.caption("Engineered by: OJT Student | Ref: ISO 10816-3, NEMA MG-1, & Pump Handbook")
 
-# Opsi Port (Sesuaikan dengan Port Arduino/Sensor di Device Manager, misal COM3 atau /dev/ttyUSB0)
-serial_port = st.sidebar.text_input("Port Serial", value="COM3")
-baud_rate = st.sidebar.selectbox("Baud Rate", [9600, 115200, 230400, 500000], index=1)
-fs = st.sidebar.number_input("Sampling Rate Sensor (Hz)", value=1000, help="Harus sesuai dengan settingan coding di Microcontroller")
-window_duration = st.sidebar.number_input("Durasi Window (detik)", value=1.0, help="Berapa detik data diambil untuk 1x analisa FFT")
+st.markdown("---")
 
-# State untuk kontrol Start/Stop
-if 'is_running' not in st.session_state:
-    st.session_state.is_running = False
+# --- SIDEBAR: INPUT DATA ---
+st.sidebar.header("📝 Input Data Inspeksi")
 
-def start_monitoring():
-    st.session_state.is_running = True
+# A. DATA NAMEPLATE
+st.sidebar.subheader("A. Spesifikasi Motor")
+nameplate_rpm = st.sidebar.number_input("Rated RPM", value=1500)
+fla = st.sidebar.number_input("Full Load Ampere (FLA)", value=10.0)
+rated_volt = st.sidebar.number_input("Rated Voltage (V)", value=380)
 
-def stop_monitoring():
-    st.session_state.is_running = False
+# B. DATA PENGUKURAN (SESSION STATE)
+st.sidebar.subheader("B. Hasil Ukur Alat (TKI II.C)")
 
-col1, col2 = st.sidebar.columns(2)
-col1.button("▶️ Mulai", on_click=start_monitoring)
-col2.button("⏹️ Stop", on_click=stop_monitoring)
+if 'vib_val' not in st.session_state: st.session_state['vib_val'] = 1.5
+if 'noise_val' not in st.session_state: st.session_state['noise_val'] = 75.0
+if 'temp_val' not in st.session_state: st.session_state['temp_val'] = 60.0
+if 'rpm_act' not in st.session_state: st.session_state['rpm_act'] = 1485
+if 'volt_act' not in st.session_state: st.session_state['volt_act'] = 380
+if 'amp_act' not in st.session_state: st.session_state['amp_act'] = 8.5
+if 'is_unbalance' not in st.session_state: st.session_state['is_unbalance'] = False
 
-# --- Placeholder Grafik ---
-# Kita butuh placeholder kosong yang akan di-update terus menerus
-status_text = st.empty()
-tab1, tab2 = st.tabs(["Time Domain (Live)", "Frequency Domain (ESA)"])
-with tab1:
-    chart_time = st.empty()
-with tab2:
-    chart_freq = st.empty()
+vib_val = st.sidebar.number_input("1. Vibration (mm/s)", value=st.session_state['vib_val'], step=0.1)
+noise_val = st.sidebar.number_input("2. Noise (dB)", value=st.session_state['noise_val'], step=1.0)
+temp_val = st.sidebar.number_input("3. Suhu Bearing (°C)", value=st.session_state['temp_val'], step=1.0)
+rpm_act = st.sidebar.number_input("4. RPM Aktual", value=st.session_state['rpm_act'], step=5)
+volt_act = st.sidebar.number_input("5a. Voltage (V)", value=st.session_state['volt_act'], step=1)
+amp_act = st.sidebar.number_input("5b. Ampere (A)", value=st.session_state['amp_act'], step=0.1)
+is_unbalance = st.sidebar.checkbox("Unbalance > 5%?", value=st.session_state['is_unbalance'])
 
-# --- Fungsi Baca Sensor ---
-def read_serial_buffer(ser, num_samples):
-    """
-    Membaca sejumlah N data dari serial port.
-    Format data dari sensor diharapkan mengirim angka baris per baris (e.g., "12.5\n12.6\n...")
-    """
-    data = []
-    try:
-        # Flush buffer lama agar data fresh
-        ser.reset_input_buffer()
+# --- OTAK SISTEM PAKAR (LOGIC FIXED) ---
+def diagnose_comprehensive(vib, noise, temp, rpm_act, rpm_ref, volt, amp, fla, unbalance):
+    # 1. HITUNG PARAMETER
+    load_percent = (amp / fla) * 100
+    slip_percent = ((rpm_ref - rpm_act) / rpm_ref) * 100
+    
+    # 2. STATUS PARAMETER
+    if vib < 2.8: vib_s = "Good"
+    elif vib < 4.5: vib_s = "Warning"
+    else: vib_s = "Critical"
+    
+    if amp > fla * 1.05: amp_s = "Overload"
+    elif amp < fla * 0.5: amp_s = "Underload"
+    else: amp_s = "Normal"
+    
+    if temp < 75: temp_s = "Normal"
+    elif temp < 90: temp_s = "High"
+    else: temp_s = "Overheat"
+    
+    if unbalance or abs(volt - rated_volt)/rated_volt > 0.1: elec_s = "Bad"
+    else: elec_s = "Good"
+
+    # 3. POHON KEPUTUSAN (URUTAN DIPERBAIKI)
+    diag = "Anomali Tidak Terdefinisi"
+    rec = "Cek manual."
+    severity = "WARNING"
+    
+    # KASUS 1: SEHAT (Wajib Slip < 3%)
+    if vib_s == "Good" and amp_s == "Normal" and temp_s == "Normal" and elec_s == "Good" and slip_percent < 3.0:
+        diag = "KONDISI PRIMA (HEALTHY)"
+        rec = "Lanjutkan operasi normal."
+        severity = "HEALTHY"
+
+    # KASUS 2: KAVITASI / DRY RUN
+    elif amp_s == "Underload" and (noise > 85 or vib_s != "Good"):
+        diag = "INDIKASI KAVITASI / DRY RUN"
+        rec = "⛔ BAHAYA! Stop Pompa. Cek sisi suction/tangki. Beban hilang."
+        severity = "CRITICAL"
+
+    # KASUS 3: ELECTRICAL FAULT (DIPINDAH KE ATAS)
+    # Kita cek ini DULUAN sebelum Bearing.
+    # Kenapa? Karena Unbalance listrik bisa menyebabkan gejala panas & getar (mirip bearing).
+    # Jika listrik pincang, itu diagnosa utamanya.
+    elif elec_s == "Bad":
+        diag = "GANGGUAN KUALITAS DAYA (Power Quality)"
+        rec = "Cek tegangan antar fase. Unbalance menyebabkan panas gulungan & vibrasi magnetik."
+        severity = "WARNING"
         
-        while len(data) < num_samples:
-            if not st.session_state.is_running:
-                break
-                
-            line = ser.readline().decode('utf-8').strip()
-            try:
-                # Konversi string ke float
-                val = float(line)
-                data.append(val)
-            except ValueError:
-                continue # Skip data sampah/corrupt
-                
-    except Exception as e:
-        st.error(f"Error membaca serial: {e}")
-        return None
-        
-    return np.array(data)
+    # KASUS 4: BEARING FAILURE
+    # Baru cek bearing kalau listrik aman.
+    elif vib_s in ["Warning", "Critical"] and (temp_s in ["High", "Overheat"] or noise > 90):
+        diag = "INDIKASI KERUSAKAN BEARING"
+        rec = "Gesekan tinggi terdeteksi. Cek greasing atau ganti bearing segera."
+        severity = "CRITICAL"
 
-# --- Loop Utama ---
-if st.session_state.is_running:
-    try:
-        # Membuka koneksi serial
-        # Timeout penting agar tidak hang jika sensor mati
-        ser = serial.Serial(serial_port, baud_rate, timeout=1)
-        status_text.success(f"Terhubung ke {serial_port}. Mengambil data...")
-        
-        # Hitung jumlah sampel yang dibutuhkan untuk 1 window
-        num_samples = int(fs * window_duration)
-        
-        while st.session_state.is_running:
-            # 1. Ambil Data Real-Time
-            raw_data = read_serial_buffer(ser, num_samples)
-            
-            if raw_data is None or len(raw_data) < num_samples:
-                continue # Tunggu buffer penuh
+    # KASUS 5: MISALIGNMENT / UNBALANCE
+    elif vib_s in ["Warning", "Critical"] and amp_s == "Normal" and temp_s == "Normal":
+        diag = "INDIKASI MISALIGNMENT / UNBALANCE"
+        rec = "Masalah mekanis murni. Cek baut pondasi (soft foot) & Laser Alignment."
+        severity = "WARNING"
+    
+    # KASUS 6: BROKEN ROTOR BAR
+    elif slip_percent > 3.0: 
+        diag = "INDIKASI ROTOR BAR RETAK (High Slip)"
+        rec = "RPM drop tidak wajar (>3%). Motor kehilangan torsi. Cek rotor."
+        severity = "WARNING"
 
-            # Buat array waktu
-            t = np.linspace(0, window_duration, len(raw_data), endpoint=False)
+    # KASUS 7: OVERLOAD
+    elif amp_s == "Overload":
+        diag = "OPERASI OVERLOAD"
+        rec = "Beban berlebih. Cek bukaan valve atau densitas fluida."
+        severity = "WARNING"
 
-            # 2. Proses FFT (Sama seperti sebelumnya)
-            N = len(raw_data)
-            window_func = windows.hann(N)
-            signal_windowed = raw_data * window_func
-            
-            yf = fft(signal_windowed)
-            xf = fftfreq(N, 1 / fs)
-            
-            half_N = N // 2
-            xf_plot = xf[:half_N]
-            yf_plot = 2.0/N * np.abs(yf[:half_N])
-            # Konversi dB (tambah epsilon biar ga error log0)
-            yf_db = 20 * np.log10(yf_plot + 1e-12)
+    return load_percent, slip_percent, diag, rec, severity, vib_s, temp_s
 
-            # 3. Update Grafik Time Domain
-            fig_time = go.Figure()
-            fig_time.add_trace(go.Scatter(y=raw_data, mode='lines', name='Arus (Raw)'))
-            fig_time.update_layout(title="Sinyal Arus Real-Time", height=300, margin=dict(l=0, r=0, t=30, b=0))
-            chart_time.plotly_chart(fig_time, use_container_width=True)
+# --- EKSEKUSI ---
+load, slip, diag, rec, sev, stat_vib, stat_temp = diagnose_comprehensive(
+    vib_val, noise_val, temp_val, rpm_act, nameplate_rpm, volt_act, amp_act, fla, is_unbalance
+)
 
-            # 4. Update Grafik Frequency Domain
-            fig_freq = go.Figure()
-            fig_freq.add_trace(go.Scatter(x=xf_plot, y=yf_db, mode='lines', name='Spectrum', line=dict(color='firebrick')))
-            fig_freq.update_layout(
-                title="Spektrum ESA Real-Time", 
-                xaxis_title="Frekuensi (Hz)", 
-                yaxis_title="dB",
-                xaxis_range=[0, 150], # Fokus ke 0-150Hz
-                height=400,
-                margin=dict(l=0, r=0, t=30, b=0)
-            )
-            chart_freq.plotly_chart(fig_freq, use_container_width=True)
-            
-            # Jeda sebentar agar browser tidak hang (opsional)
-            time.sleep(0.1)
+# --- TAMPILAN DASHBOARD ---
+st.subheader("📊 Hasil Analisa Otomatis")
+col1, col2 = st.columns([3, 2])
 
-    except serial.SerialException as e:
-        status_text.error(f"Gagal membuka port {serial_port}. Pastikan tidak dipakai aplikasi lain (Arduino IDE, dll). Error: {e}")
-        st.session_state.is_running = False
-    finally:
-        if 'ser' in locals() and ser.is_open:
-            ser.close()
-else:
-    status_text.info("Tekan 'Mulai' untuk menghubungkan ke sensor.")
+with col1:
+    if sev == "HEALTHY": st.success(f"### ✅ {diag}")
+    elif sev == "WARNING": st.warning(f"### ⚠️ {diag}")
+    else: st.error(f"### 🚨 {diag}")
+    st.info(f"**Rekomendasi:** {rec}")
+
+with col2:
+    c_a, c_b, c_c = st.columns(3)
+    c_a.metric("Load", f"{load:.0f}%", f"{amp_act} A")
+    c_b.metric("Vibrasi", f"{vib_val}", stat_vib)
+    c_c.metric("Slip", f"{slip:.1f}%", f"{rpm_act} RPM")
+    
+    health_score = 100
+    if sev == "WARNING": health_score = 60
+    if sev == "CRITICAL": health_score = 20
+    st.write("Machine Health Index:")
+    st.progress(health_score)
+
+# --- PANEL TOMBOL DEMO ---
+st.divider()
+st.markdown("### 🎛️ Panel Simulasi Kasus (Demo Manager)")
+c1, c2, c3 = st.columns(3)
+
+if c1.button("1. KASUS SEHAT"):
+    st.session_state.update({'vib_val': 1.2, 'noise_val': 75.0, 'temp_val': 60.0, 'rpm_act': 1485, 'volt_act': 380, 'amp_act': 8.5, 'is_unbalance': False})
+    st.rerun()
+
+if c2.button("2. KASUS KAVITASI"):
+    st.session_state.update({'vib_val': 3.5, 'noise_val': 95.0, 'temp_val': 65.0, 'rpm_act': 1495, 'volt_act': 380, 'amp_act': 4.0, 'is_unbalance': False})
+    st.rerun()
+
+if c3.button("3. BEARING PECAH"):
+    st.session_state.update({'vib_val': 7.5, 'noise_val': 98.0, 'temp_val': 95.0, 'rpm_act': 1470, 'volt_act': 380, 'amp_act': 11.0, 'is_unbalance': False})
+    st.rerun()
+
+c4, c5, c6 = st.columns(3)
+
+if c4.button("4. MISALIGNMENT"):
+    st.session_state.update({'vib_val': 5.5, 'noise_val': 80.0, 'temp_val': 62.0, 'rpm_act': 1480, 'volt_act': 380, 'amp_act': 8.5, 'is_unbalance': False})
+    st.rerun()
+
+if c5.button("5. ELECTRICAL FAULT"):
+    st.session_state.update({'vib_val': 3.2, 'noise_val': 78.0, 'temp_val': 85.0, 'rpm_act': 1480, 'volt_act': 370, 'amp_act': 9.0, 'is_unbalance': True})
+    st.rerun()
+
+if c6.button("6. BROKEN ROTOR BAR"):
+    st.session_state.update({'vib_val': 2.5, 'noise_val': 80.0, 'temp_val': 70.0, 'rpm_act': 1420, 'volt_act': 380, 'amp_act': 9.5, 'is_unbalance': False})
+    st.rerun()
+
+st.divider()
+with st.expander("📚 DASAR REFERENSI"):
+    st.markdown("""
+    **Sistem Pakar ini mengacu pada:**
+    1.  **ISO 10816-3 (Vibrasi)**: Menetapkan batas Zona C (Warning) di angka 2.8 - 4.5 mm/s.
+    2.  **Pump Handbook (Kavitasi)**: Menjelaskan fenomena *Loss of Prime* menyebabkan Ampere Drop & Noise.
+    3.  **ISO 15243 (Bearing)**: Kerusakan elemen gelinding menyebabkan vibrasi frekuensi tinggi & panas.
+    4.  **NEMA MG-1 (Rotor Bar)**: Slip >3-5% pada beban normal indikasi *broken rotor bars*.
+    """)
