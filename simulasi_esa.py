@@ -122,7 +122,7 @@ load, slip, diag, rec, sev, stat_vib, stat_temp = diagnose_comprehensive(
 )
 
 # --- TAMPILAN DASHBOARD ---
-st.subheader("📊 Hasil Analisa Otomatis")
+st.subheader("📊 Hasil Analisa")
 col1, col2 = st.columns([3, 2])
 
 with col1:
