@@ -6,7 +6,7 @@ import streamlit as st
 st.set_page_config(
     page_title="Reliability Assistant Pro",
     layout="wide",
-    page_icon="🛡️",
+    page_icon="🛡️🙏🏻",
     initial_sidebar_state="expanded"
 )
 
