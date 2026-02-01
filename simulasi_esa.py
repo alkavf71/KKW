@@ -233,7 +233,7 @@ st.caption("Pilih skenario kerusakan untuk menguji sistem diagnosa:")
 col_d1, col_d2, col_d3 = st.columns(3)
 col_d4, col_d5, col_d6 = st.columns(3)
 
-# Helper function untuk update state
+# Helper function untuk update state (YANG SUDAH DIPERBAIKI)
 def set_demo(vib, noise, temp, rpm, amp, v_unbalance=False):
     st.session_state['vib_val'] = vib
     st.session_state['noise_val'] = noise
@@ -243,8 +243,9 @@ def set_demo(vib, noise, temp, rpm, amp, v_unbalance=False):
     # Set Voltages
     if v_unbalance:
         st.session_state['v_rs'] = 380.0
-        st.session_state['v_st'] = 360.0 # Timpang
-        st.session_state['v_tr'] = 375.0
+        # GANTI 360.0 JADI 350.0 AGAR UNBALANCE > 5%
+        st.session_state['v_st'] = 350.0 
+        st.session_state['v_tr'] = 380.0
     else:
         st.session_state['v_rs'] = 380.0
         st.session_state['v_st'] = 380.0
