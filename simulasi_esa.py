@@ -68,9 +68,11 @@ with st.sidebar.expander("3. Data Bearing (Envelope)", expanded=False):
     # Default: Bearing 6309
     n_balls = st.number_input("Jumlah Bola (N)", value=8)
     bd = st.number_input("Diameter Bola (Bd - mm)", value=17.0)
-    pd = st.number_input("Pitch Diameter (Pd - mm)", value=72.5)
+    
+    # === PERBAIKAN DI SINI (Ganti 'pd' jadi 'd_pitch') ===
+    d_pitch = st.number_input("Pitch Diameter (Pd - mm)", value=72.5) 
+    
     angle = st.number_input("Contact Angle (deg)", value=0.0)
-
 # ==========================================
 # 3. LOGIC CENTER (OTAK DIAGNOSA)
 # ==========================================
@@ -226,7 +228,7 @@ with tab2:
     st.subheader("Analisa Bearing (High Frequency)")
     
     # Hitung BPFO/BPFI
-    calc_bpfo, calc_bpfi = calculate_bearing_freqs(n_balls, bd, pd, angle, rpm_input)
+        calc_bpfo, calc_bpfi = calculate_bearing_freqs(n_balls, bd, d_pitch, angle, rpm_input)
     
     c1, c2 = st.columns(2)
     with c1:
