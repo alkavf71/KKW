@@ -179,4 +179,23 @@ if submit:
         # Visual Issues
         if chk_baut: issues.append("🔧 **Baut Kendor:** Lakukan pengencangan (Torque).")
         if chk_bocor: issues.append("💧 **Kebocoran:** Cek Seal/Gasket.")
-        if chk_paint
+        if chk_paint: issues.append("🎨 **Coating:** Jadwalkan pengecatan ulang (Ref: Laporan Inspeksi).")
+        if chk_ground: issues.append("⚡ **Grounding:** Perbaiki kabel grounding.")
+
+        if issues:
+            st.markdown("**Temuan Tambahan:**")
+            for i in issues:
+                st.write(f"- {i}")
+        
+        # REKOMENDASI FINAL
+        st.divider()
+        if iso_status in ["UNSATISFACTORY", "UNACCEPTABLE"] or temp_bearing > 85:
+            st.error("REKOMENDASI: Buat Work Order (WO) Prioritas Tinggi. Panggil Teknisi.")
+        elif iso_status == "SATISFACTORY" or issues:
+            st.warning("REKOMENDASI: Monitor ketat & Lakukan maintenance ringan (Cleaning/Greasing).")
+        else:
+            st.success("REKOMENDASI: Lanjut Operasi Normal.")
+
+    # TABLE RAW DATA
+    with st.expander("Lihat Data Mentah Input"):
+        st.json(vibs)
