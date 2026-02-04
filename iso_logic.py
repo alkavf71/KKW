@@ -1,45 +1,55 @@
 # iso_logic.py
 
-def get_vibration_status(velocity_rms, machine_class="Class II"):
+def get_iso_status(velocity_rms, machine_class="Class II"):
     """
-    Menentukan Zona Vibrasi berdasarkan ISO 10816-1 (Sesuai TKI C-04).
-    Fokus pada Class II (Medium Machines 15kW - 300kW).
+    Menentukan Zona Vibrasi berdasarkan ISO 10816-1 (Referensi TKI C-04 2025).
     """
+    # Limit TKI C-04 (2025) Halaman 7 untuk Class II (Medium Machines)
+    # Zone A / B / C / D
+    limits = [1.12, 2.80, 7.10] 
     
-    # Limit diambil dari Tabel TKI C-04 Halaman 7
-    limits = {
-        "Class I":  [0.71, 1.80, 4.50],  # Small Machines
-        "Class II": [1.12, 2.80, 7.10],  # Medium Machines (FT Moutong & Luwuk masuk sini)
-        "Class III":[1.80, 4.50, 11.20], # Large Rigid
-        "Class IV": [2.80, 7.10, 18.00]  # Large Soft
-    }
-    
-    lim = limits.get(machine_class, limits["Class II"])
-    
-    # Logika Penentuan Zona
-    if velocity_rms <= lim[0]:
-        return "GOOD", "success", "Zona A (Hijau): Operasi Normal. Lanjutkan pemantauan rutin."
-    
-    elif velocity_rms <= lim[1]:
-        return "SATISFACTORY", "warning", "Zona B (Kuning): Operasi jangka panjang diperbolehkan. Cek parameter lain."
-    
-    elif velocity_rms <= lim[2]:
-        return "UNSATISFACTORY", "orange", "Zona C (Oranye): Operasi terbatas. Jadwalkan perbaikan (Alignment/Bearing)."
-        # Warna orange di streamlit diganti string hex atau label khusus nanti
-        
+    if velocity_rms <= limits[0]:
+        return "GOOD", "success"
+    elif velocity_rms <= limits[1]:
+        return "SATISFACTORY", "warning"
+    elif velocity_rms <= limits[2]:
+        return "UNSATISFACTORY", "orange"
     else:
-        return "UNACCEPTABLE", "error", "Zona D (Merah): BAHAYA! Vibrasi merusak. Stop operasi & panggil teknisi."
+        return "UNACCEPTABLE", "error"
 
-def check_visual_anomaly(visual_data):
+def analyze_root_cause(high_vib_points):
     """
-    Mengecek apakah ada temuan visual dari checklist Harian/Bulanan.
+    Menganalisa penyebab kerusakan berdasarkan TITIK vibrasi tertinggi.
+    Referensi: TKI C-017 (2018) Tabel 1 - Tabel Pemeriksaan Pompa.
     """
-    issues = []
-    if visual_data.get("baut_kendor"):
-        issues.append("Lakukan pengencangan ulang baut & mur (Ref: TKI C-04 Poin 6).")
-    if visual_data.get("kebocoran"):
-        issues.append("Investigasi sumber kebocoran (Seal/Pipa) (Ref: TKI C-05 Poin 2).")
-    if visual_data.get("suara_abnormal"):
-        issues.append("Cek fisik bearing atau kavitasi (Ref: TKI C-05 Poin 9).")
+    diagnoses = []
+    
+    for point, value in high_vib_points.items():
+        # Logika Diagnosa TKI C-017 Tabel 1
+        if "Motor NDE V" in point: # Motor Outboard Vertical
+            diagnoses.append(f"Titik {point}: Indikasi **Paralel Misalignment**.")
+        elif "Motor NDE H" in point: # Motor Outboard Horizontal
+            diagnoses.append(f"Titik {point}: Indikasi **Bearing Looseness**.")
+        elif "Motor DE V" in point: # Motor Inboard Vertical
+            diagnoses.append(f"Titik {point}: Indikasi **Misalignment**.")
+        elif "Motor DE H" in point: # Motor Inboard Horizontal
+            diagnoses.append(f"Titik {point}: Indikasi **Bearing Looseness**.")
+        elif "Motor DE A" in point: # Motor Inboard Axial
+            diagnoses.append(f"Titik {point}: Indikasi **Misalignment**.")
+            
+        elif "Pump DE V" in point: # Pump Inboard Vertical (Sisi dekat kopling)
+            diagnoses.append(f"Titik {point}: Indikasi **Bearing Looseness**.")
+        elif "Pump DE H" in point: # Pump Inboard Horizontal
+            diagnoses.append(f"Titik {point}: Indikasi **Kavitasi** atau Kondisi Aman (Cek Flow).")
+        elif "Pump DE A" in point: # Pump Inboard Axial
+            diagnoses.append(f"Titik {point}: Indikasi **Paralel Misalignment**.")
+            
+        elif "Pump NDE V" in point: # Pump Outboard Vertical
+            diagnoses.append(f"Titik {point}: Indikasi **Unbalance** dan **Looseness**.")
+        elif "Pump NDE H" in point: # Pump Outboard Horizontal
+            diagnoses.append(f"Titik {point}: Indikasi **Bearing Looseness**.")
+            
+    if not diagnoses:
+        diagnoses.append("Pola vibrasi umum. Lakukan analisa spektrum lanjutan.")
         
-    return issues
+    return diagnoses
