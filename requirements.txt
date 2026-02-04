@@ -4,3 +4,4 @@ scipy
 plotly
 pyserial
 pandas
+openpyxl
