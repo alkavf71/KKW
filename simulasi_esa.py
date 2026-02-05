@@ -173,7 +173,7 @@ def main():
     
     with st.form("industrial_input_form"):
         st.markdown("### 1. Vibration Data Acquisition (Velocity mm/s RMS)")
-        st.caption("Masukkan data sesuai pembacaan alat (e.g., ADASH/VibXpert). Desimal menggunakan titik (.)")
+        st.caption("Masukkan data sesuai pembacaan alat. Desimal menggunakan titik (.)")
 
         # Container untuk input
         c_motor, c_pump = st.columns(2)
