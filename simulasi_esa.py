@@ -3,295 +3,506 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from enum import Enum
 
 # ==========================================
-# 1. STANDARDS & ANSI CODES LIBRARY
+# 1. STANDARDS & CONSTANTS LIBRARY
 # ==========================================
 class ANSI:
     """
     IEEE C37.2 Standard Device Numbers
-    Digunakan untuk referensi Proteksi Elektrikal Migas.
+    Digunakan untuk referensi Proteksi Elektrikal Migas & TKI.
     """
     UV_27 = "27 - Undervoltage"
     UC_37 = "37 - Undercurrent (Dry Run)"
-    UB_46 = "46 - Current Unbalance / Negative Seq"
+    UB_46 = "46 - Current Unbalance / Neg Seq"
     TH_49 = "49 - Thermal Overload"
     IOC_50 = "50 - Instantaneous Overcurrent"
     GF_50N = "50N/51N - Ground Fault"
     LR_50LR = "50LR - Locked Rotor"
     TOC_51 = "51 - Time Overcurrent"
     OV_59 = "59 - Overvoltage"
-    ST_66 = "66 - Start Limitation (Starts/Hour)"
+    ST_66 = "66 - Start Limitation"
+
+class ISOZone(Enum):
+    """ISO 10816-3 Vibration Severity Zones"""
+    A = "GOOD (Zone A)"
+    B = "SATISFACTORY (Zone B)"
+    C = "UNSATISFACTORY (Zone C)"
+    D = "UNACCEPTABLE (Zone D)"
 
 class Limits:
-    # IEC 60034-1 & NEMA MG-1 Limits
+    # --- ELECTRICAL (IEC 60034 / NEMA MG-1) ---
     VOLTAGE_TOLERANCE_PCT = 10.0  # +/- 10%
-    FREQ_TOLERANCE_PCT = 5.0
-    UNBALANCE_ALARM = 2.0  # %
-    UNBALANCE_TRIP = 5.0   # %
-    GROUND_FAULT_PICKUP = 0.5 # Amperes (Default setting, usually low)
+    UNBALANCE_ALARM = 2.0  # % Current Unbalance
+    UNBALANCE_TRIP = 5.0   # % Current Unbalance
+    
+    # --- MECHANICAL (ISO 10816-3 / API 610) ---
+    # Class II (Medium Machines 15-300kW) Limits
+    ISO_CLASS_II = [1.12, 2.80, 7.10] # Boundary A/B, B/C, C/D
+    
+    # --- COMMISSIONING (API 686) ---
+    MAX_SOFT_FOOT = 0.05 # mm
+    ALIGNMENT_TOLERANCE = 0.05 # mm (General rule for 3000 RPM)
 
 # ==========================================
-# 2. INDUSTRIAL DATA STRUCTURES
+# 2. DATA MODELS (INDUSTRIAL GRADE)
 # ==========================================
 @dataclass
 class ProtectionSettings:
-    """Setting Relay Proteksi (Bisa disesuaikan dengan datasheet motor)"""
-    flc_amps: float         # Full Load Current (Amper Nominal)
-    rated_volt: float       # Voltage Nominal (e.g., 380V)
+    """Setting Relay Proteksi (Electrical Data)"""
+    flc_amps: float         # Full Load Current (In)
+    rated_volt: float       # Voltage Nominal
     
-    # Settings (Thresholds)
-    pickup_51: float = 1.10  # 110% of FLC for Overcurrent
-    pickup_50: float = 6.00  # 600% of FLC for Short Circuit
-    pickup_27: float = 0.90  # 90% Voltage (Undervoltage)
-    pickup_59: float = 1.10  # 110% Voltage (Overvoltage)
-    pickup_37: float = 0.40  # 40% FLC (Undercurrent/Dry Run)
-    pickup_50n: float = 1.0  # 1 Ampere Ground Fault Limit
-    max_starts_hr: int = 3   # Max start per jam (ANSI 66)
+    # Thresholds (Multipliers)
+    pickup_51: float = 1.10  # 110% In (Overload)
+    pickup_50: float = 6.00  # 600% In (Short Circuit)
+    pickup_27: float = 0.90  # 90% Un (Undervoltage)
+    pickup_59: float = 1.10  # 110% Un (Overvoltage)
+    pickup_37: float = 0.40  # 40% In (Dry Run)
+    pickup_50n: float = 1.0  # 1.0 Ampere (Ground Fault)
+    max_starts_hr: int = 3   # ANSI 66 Limit
+
+@dataclass
+class MechanicalSpecs:
+    """Spesifikasi Mekanikal & Operasional"""
+    power_kw: float
+    rpm_design: int
+    mounting: str = "Rigid"
+    coupling_type: str = "Flexible"
+    bearing_temp_limit: float = 85.0 # TKI C-04 Limit
+
+@dataclass
+class VibrationReading:
+    """Single Data Point for Vibration"""
+    location: str  # e.g., "Motor DE"
+    axis: str      # e.g., "Horizontal"
+    value: float   # mm/s RMS
 
 @dataclass
 class Asset:
+    """Master Asset Object"""
     tag: str
     name: str
     loc: str
-    protection: ProtectionSettings
+    mech: MechanicalSpecs
+    elec: ProtectionSettings
 
-# Database Aset Dummy
-ASSETS = {
-    "P-02 (FT Moutong)": Asset(
+# --- ASSET DATABASE (MOCKUP) ---
+# Data ini diambil dari Laporan Inspeksi PDF yang diupload user
+ASSETS_DB = {
+    "P-02": Asset(
         "0459599", "Pompa Pertalite", "FT Moutong",
+        MechanicalSpecs(power_kw=18.5, rpm_design=2900, mounting="Rigid"),
         ProtectionSettings(flc_amps=35.5, rated_volt=380, max_starts_hr=4)
     ),
-    "733-P-103 (FT Luwuk)": Asset(
+    "733-P-103": Asset(
         "1041535A", "Pompa Bio Solar", "FT Luwuk",
+        MechanicalSpecs(power_kw=30.0, rpm_design=2900, mounting="Rigid"),
         ProtectionSettings(flc_amps=54.0, rated_volt=400, max_starts_hr=3)
+    ),
+    "706-P-203": Asset(
+        "049-1611186", "Pompa LPG", "IT Makassar",
+        MechanicalSpecs(power_kw=15.0, rpm_design=2955, mounting="Rigid"),
+        ProtectionSettings(flc_amps=28.5, rated_volt=380, max_starts_hr=3)
     )
 }
 
 # ==========================================
-# 3. CORE LOGIC: DIGITAL RELAY SIMULATOR
+# 3. LOGIC ENGINES (THE BRAINS)
 # ==========================================
-class DigitalRelay:
+
+class ElectricalEngine:
     """
     Simulasi Logic Protection Relay (Multilin/Sepam).
-    Menerima input raw, mengeluarkan Status Trip/Alarm sesuai ANSI Code.
     """
     def __init__(self, settings: ProtectionSettings):
         self.s = settings
-        self.flags = [] # Menyimpan log trip
+        self.flags = [] # Log Trip/Alarm
 
-    def check_voltage(self, v_l1, v_l2, v_l3):
-        avg_v = (v_l1 + v_l2 + v_l3) / 3
+    def analyze(self, v_in: list, i_in: list, i_g: float, starts: int, temp: float, status: str):
+        # Reset flags
+        self.flags = []
         
-        # ANSI 27: Undervoltage
+        # Unpack
+        v1, v2, v3 = v_in
+        i1, i2, i3 = i_in
+        is_starting = (status == "Starting")
+        
+        # 1. Voltage Check (ANSI 27/59)
+        avg_v = np.mean([v1, v2, v3])
         if avg_v < (self.s.rated_volt * self.s.pickup_27):
-            self.flags.append(f"TRIP {ANSI.UV_27}: {avg_v:.1f}V < Limit {self.s.rated_volt * self.s.pickup_27:.1f}V")
-            return "TRIP", "red"
-            
-        # ANSI 59: Overvoltage
-        if avg_v > (self.s.rated_volt * self.s.pickup_59):
-            self.flags.append(f"TRIP {ANSI.OV_59}: {avg_v:.1f}V > Limit {self.s.rated_volt * self.s.pickup_59:.1f}V")
-            return "TRIP", "red"
-            
-        return "NORMAL", "green"
+            self.flags.append(f"TRIP {ANSI.UV_27}: Voltage {avg_v:.1f}V < Limit")
+        elif avg_v > (self.s.rated_volt * self.s.pickup_59):
+            self.flags.append(f"TRIP {ANSI.OV_59}: Voltage {avg_v:.1f}V > Limit")
 
-    def check_current(self, i_l1, i_l2, i_l3, is_starting=False):
-        max_i = max(i_l1, i_l2, i_l3)
-        avg_i = (i_l1 + i_l2 + i_l3) / 3
-
-        # ANSI 50/51: Overcurrent
+        # 2. Current Check (ANSI 50/51/37/50LR)
+        max_i = max(i1, i2, i3)
+        avg_i = np.mean([i1, i2, i3])
+        
         if is_starting:
-            # ANSI 50LR: Locked Rotor Check (Jika start current diam lama di > 6x FLA)
+            # ANSI 50LR (Locked Rotor)
             if max_i > (self.s.flc_amps * self.s.pickup_50):
-                self.flags.append(f"TRIP {ANSI.LR_50LR} / {ANSI.IOC_50}: Current {max_i:.1f}A Detected")
-                return "TRIP (LOCKED ROTOR)", "red"
+                 self.flags.append(f"TRIP {ANSI.LR_50LR}: Starting Current {max_i:.1f}A too high")
         else:
-            # Normal Running
+            # ANSI 51 (Overload)
             if max_i > (self.s.flc_amps * self.s.pickup_51):
-                self.flags.append(f"TRIP {ANSI.TOC_51}: Overload {max_i:.1f}A > {self.s.flc_amps * self.s.pickup_51:.1f}A")
-                return "TRIP (OVERLOAD)", "red"
-        
-        # ANSI 37: Undercurrent (Dry Run Protection)
-        if avg_i < (self.s.flc_amps * self.s.pickup_37) and not is_starting and avg_i > 1.0:
-            self.flags.append(f"ALARM {ANSI.UC_37}: Dry Run Detected ({avg_i:.1f}A)")
-            return "ALARM (UNDERLOAD)", "orange"
+                self.flags.append(f"TRIP {ANSI.TOC_51}: Overload {max_i:.1f}A detected")
+            # ANSI 37 (Dry Run)
+            elif avg_i < (self.s.flc_amps * self.s.pickup_37) and avg_i > 1.0:
+                self.flags.append(f"ALARM {ANSI.UC_37}: Dry Run / Underload {avg_i:.1f}A")
 
-        return "NORMAL", "green"
-
-    def check_unbalance_ground(self, i_l1, i_l2, i_l3, i_g_measured=0.0):
-        # ANSI 46: Current Unbalance / Negative Sequence
-        avg_i = (i_l1 + i_l2 + i_l3) / 3
+        # 3. Unbalance & Ground (ANSI 46/50N)
+        # Unbalance
         if avg_i > 0:
-            max_dev = max(abs(i_l1 - avg_i), abs(i_l2 - avg_i), abs(i_l3 - avg_i))
+            max_dev = max(abs(i - avg_i) for i in [i1, i2, i3])
             unbal_pct = (max_dev / avg_i) * 100
-            
             if unbal_pct > Limits.UNBALANCE_TRIP:
-                self.flags.append(f"TRIP {ANSI.UB_46}: Unbalance {unbal_pct:.1f}%")
+                self.flags.append(f"TRIP {ANSI.UB_46}: Current Unbalance {unbal_pct:.1f}%")
             elif unbal_pct > Limits.UNBALANCE_ALARM:
-                self.flags.append(f"ALARM {ANSI.UB_46}: Unbalance {unbal_pct:.1f}%")
-
-        # ANSI 50N/51N: Ground Fault
-        # 1. Calculation (Residual)
-        i_residual = abs(i_l1 + i_l2 + i_l3) # Simplified vector sum approx for scalar input
-        # Note: In real AC vectors, it's Vector Sum. Here we use Measured input if avail.
-        
-        check_val = i_g_measured if i_g_measured > 0 else 0.0
-        
-        if check_val > self.s.pickup_50n:
-             self.flags.append(f"TRIP {ANSI.GF_50N}: Ground Current {check_val:.2f}A > {self.s.pickup_50n}A")
-
-        return unbal_pct
-
-    def check_thermal_stats(self, starts_last_hour, motor_temp):
-        # ANSI 66: Start Limitation
-        if starts_last_hour > self.s.max_starts_hr:
-             self.flags.append(f"BLOCK {ANSI.ST_66}: {starts_last_hour} Starts/Hr > Max {self.s.max_starts_hr}")
-
-        # ANSI 49: Thermal Overload (Temperature)
-        if motor_temp > 130: # Class B/F Limit rough check
-             self.flags.append(f"TRIP {ANSI.TH_49}: Winding Temp {motor_temp}°C")
-
-    def get_diagnostics(self):
-        if not self.flags:
-            return "SYSTEM HEALTHY", "green", []
+                self.flags.append(f"ALARM {ANSI.UB_46}: Current Unbalance {unbal_pct:.1f}%")
         else:
-            return "PROTECTION TRIP/ALARM", "red", self.flags
+            unbal_pct = 0.0
+
+        # Ground Fault (Zero Sequence)
+        if i_g > self.s.pickup_50n:
+            self.flags.append(f"TRIP {ANSI.GF_50N}: Ground Fault {i_g:.2f}A detected")
+
+        # 4. Thermal & Stats (ANSI 49/66)
+        if starts > self.s.max_starts_hr:
+            self.flags.append(f"BLOCK {ANSI.ST_66}: {starts} Starts/Hr Exceeded")
+        if temp > 130: # Winding limit
+            self.flags.append(f"TRIP {ANSI.TH_49}: Winding Overheat {temp}°C")
+
+        return self.flags, unbal_pct
+
+class MechanicalEngine:
+    """
+    Analisa Vibrasi ISO 10816 & Root Cause TKI C-017
+    """
+    @staticmethod
+    def get_iso_status(val: float) -> Tuple[ISOZone, str]:
+        # Menggunakan Limit Class II (TKI C-04)
+        limits = Limits.ISO_CLASS_II
+        if val <= limits[0]: return ISOZone.A, "#2ecc71" # Green
+        elif val <= limits[1]: return ISOZone.B, "#f1c40f" # Yellow
+        elif val <= limits[2]: return ISOZone.C, "#e67e22" # Orange
+        else: return ISOZone.D, "#e74c3c" # Red
+
+    @staticmethod
+    def analyze_root_cause(readings: List[VibrationReading], warning_limit: float) -> List[str]:
+        causes = []
+        problem_points = [r for r in readings if r.value > warning_limit]
+        
+        if not problem_points:
+            return []
+
+        # Logic TKI C-017 / ISO 18436
+        # 1. Misalignment (Tinggi di Axial)
+        if any(r.axis == "Axial" and r.value > warning_limit for r in problem_points):
+            causes.append("🔴 **MISALIGNMENT:** Vibrasi dominan di arah Axial (Cek Kopling).")
+        
+        # 2. Unbalance (Tinggi di Horizontal/Radial)
+        # Cek jika Horizontal tinggi tapi Axial rendah
+        high_horiz = [r for r in problem_points if r.axis == "Horizontal"]
+        high_axial = [r for r in problem_points if r.axis == "Axial"]
+        
+        if high_horiz and not high_axial:
+            causes.append("🟠 **UNBALANCE:** Vibrasi dominan di arah Radial (Cek Impeller/Rotor).")
+
+        # 3. Looseness (Tinggi di Vertikal)
+        if any(r.axis == "Vertical" and r.value > warning_limit for r in problem_points):
+             causes.append("🔧 **MECHANICAL LOOSENESS:** Vibrasi tinggi di arah Vertikal (Cek Baut Pondasi).")
+
+        return list(set(causes)) # Remove duplicates
+
+class CommissioningEngine:
+    """Validasi API 686"""
+    @staticmethod
+    def check_installation(soft_foot: float, v_offset: float, h_offset: float) -> List[str]:
+        issues = []
+        # Soft Foot Check
+        if soft_foot > Limits.MAX_SOFT_FOOT:
+            issues.append(f"❌ REJECT: Soft Foot {soft_foot}mm > {Limits.MAX_SOFT_FOOT}mm")
+        
+        # Alignment Check
+        max_align = max(abs(v_offset), abs(h_offset))
+        if max_align > Limits.ALIGNMENT_TOLERANCE:
+             issues.append(f"❌ REJECT: Alignment Offset {max_align}mm > {Limits.ALIGNMENT_TOLERANCE}mm")
+             
+        if not issues:
+            return ["✅ ACCEPTED: Installation within API 686 tolerances."]
+        return issues
 
 # ==========================================
-# 4. STREAMLIT UI IMPLEMENTATION
+# 4. STREAMLIT FRONTEND
 # ==========================================
 def main():
-    st.set_page_config(page_title="Industrial Protection Relay", layout="wide", page_icon="⚡")
+    st.set_page_config(page_title="Industrial Reliability Suite", layout="wide", page_icon="🏭")
     
+    # --- HEADER ---
     st.title("🛡️ Digital Reliability & Protection Dashboard")
-    st.markdown("Electrical Protection System Simulation (ANSI/IEEE Std)")
+    st.markdown("Integrated Mechanical (ISO/API) & Electrical (ANSI/IEEE) Analysis System")
+    st.markdown("---")
 
-    # Sidebar Config
+    # --- SIDEBAR: ASSET CONFIG ---
     with st.sidebar:
-        st.header("Asset Configuration")
-        sel_asset = st.selectbox("Select Asset:", list(ASSETS.keys()))
-        asset = ASSETS[sel_asset]
+        st.header("⚙️ Asset Selection")
+        selected_key = st.selectbox("Choose Asset Tag:", list(ASSETS_DB.keys()))
+        asset = ASSETS_DB[selected_key]
         
         st.info(f"""
-        **Relay Settings ({asset.name})**
-        \nRated Volts: {asset.protection.rated_volt} V
-        \nFLA (In): {asset.protection.flc_amps} A
-        \nANSI 50 Set: {asset.protection.pickup_50}x In
-        \nANSI 51 Set: {asset.protection.pickup_51}x In
-        \nANSI 66 Max: {asset.protection.max_starts_hr} Starts/Hr
+        **Asset Profile:**
+        \n🏷️ **Tag:** `{asset.tag}`
+        \n📍 **Loc:** `{asset.loc}`
+        \n⚡ **Elec:** {asset.elec.flc_amps}A / {asset.elec.rated_volt}V
+        \n🌊 **Mech:** {asset.mech.power_kw}kW / {asset.mech.rpm_design}RPM
         """)
-
-    # --- MAIN INPUT FORM ---
-    with st.form("protection_input"):
-        st.subheader("📡 Live Data Injection (Simulated)")
         
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("### ⚡ Voltage (V)")
-            v1 = st.number_input("V L1-L2", value=float(asset.protection.rated_volt))
-            v2 = st.number_input("V L2-L3", value=float(asset.protection.rated_volt))
-            v3 = st.number_input("V L3-L1", value=float(asset.protection.rated_volt))
-        
-        with col2:
-            st.markdown("### 🔌 Current (A)")
-            i1 = st.number_input("I Phase 1", value=float(asset.protection.flc_amps * 0.8))
-            i2 = st.number_input("I Phase 2", value=float(asset.protection.flc_amps * 0.8))
-            i3 = st.number_input("I Phase 3", value=float(asset.protection.flc_amps * 0.8))
-            ig = st.number_input("I Ground (Zero Seq)", value=0.0, step=0.1)
-
-        with col3:
-            st.markdown("### ⚙️ Operational Status")
-            starts = st.number_input("Starts in Last Hour:", 0, 10, 1)
-            temp = st.number_input("Winding Temp (°C):", 25.0, 180.0, 60.0)
-            status_motor = st.radio("Motor Status:", ["Running", "Starting", "Stopped"])
-        
-        submit = st.form_submit_button("🔍 ANALYZE PROTECTION LOGIC")
-
-    # --- LOGIC EXECUTION ---
-    if submit:
-        # Initialize Relay Simulator
-        relay = DigitalRelay(asset.protection)
-        
-        # 1. Run Checks
-        is_starting = (status_motor == "Starting")
-        
-        # Check Voltage (27, 59)
-        volt_stat, volt_col = relay.check_voltage(v1, v2, v3)
-        
-        # Check Current (50, 51, 37, 50LR)
-        curr_stat, curr_col = relay.check_current(i1, i2, i3, is_starting)
-        
-        # Check Unbalance & Ground (46, 50N)
-        unbal_val = relay.check_unbalance_ground(i1, i2, i3, ig)
-        
-        # Check Thermal & Stats (49, 66)
-        relay.check_thermal_stats(starts, temp)
-        
-        # Get Final Results
-        final_status, final_color, logs = relay.get_diagnostics()
-
-        # --- DISPLAY RESULTS (DASHBOARD) ---
         st.divider()
-        st.header("📊 Protection Relay Output")
+        st.caption(f"Standards: ISO 10816-3, API 686, IEEE C37.2")
+
+    # --- MAIN TABS ---
+    tab_vib, tab_elec, tab_comm = st.tabs([
+        "🌊 Mechanical & Vibration (ISO)", 
+        "⚡ Electrical Protection (ANSI)",
+        "🚀 Commissioning (API 686)"
+    ])
+
+    # ==========================================
+    # TAB 1: MECHANICAL VIBRATION
+    # ==========================================
+    with tab_vib:
+        st.subheader(f"Vibration Diagnostics: {asset.name}")
+        st.caption("Input Max Velocity RMS (mm/s) per point. Logic: Highest Value determines severity (ISO 10816).")
         
-        # Top KPI Cards
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("System Voltage", f"{(v1+v2+v3)/3:.1f} V", delta_color="inverse", delta="Trip" if volt_col=="red" else "Normal")
-        kpi2.metric("Max Current", f"{max(i1,i2,i3):.1f} A", delta_color="inverse", delta="Trip" if curr_col=="red" else "Normal")
-        kpi3.metric("Unbalance (ANSI 46)", f"{unbal_val:.2f} %", delta_color="inverse", delta="High" if unbal_val > Limits.UNBALANCE_ALARM else "Normal")
-        kpi4.metric("Thermal (ANSI 49)", f"{temp} °C", delta_color="inverse", delta="Overheat" if temp>130 else "Normal")
-
-        # Visual Relay Flags (The Manager Request)
-        st.subheader("Relay Flags (ANSI Codes)")
-        
-        # Grid visual for ANSI codes
-        ansi_codes = {
-            ANSI.UV_27: "red" if any("27" in s for s in logs) else "green",
-            ANSI.OV_59: "red" if any("59" in s for s in logs) else "green",
-            ANSI.IOC_50: "red" if any("50:" in s for s in logs) else "green",
-            ANSI.TOC_51: "red" if any("51" in s for s in logs) else "green",
-            ANSI.UC_37: "orange" if any("37" in s for s in logs) else "green",
-            ANSI.UB_46: "orange" if any("46" in s for s in logs) else "green",
-            ANSI.GF_50N: "red" if any("50N" in s for s in logs) else "green",
-            ANSI.ST_66: "orange" if any("66" in s for s in logs) else "green",
-        }
-
-        # Create a visual grid of 'LEDs'
-        cols = st.columns(4)
-        for i, (code, color) in enumerate(ansi_codes.items()):
-            with cols[i % 4]:
-                st.markdown(f"""
-                <div style="
-                    border: 2px solid {color};
-                    border-radius: 5px;
-                    padding: 10px;
-                    text-align: center;
-                    background-color: {'rgba(255,0,0,0.1)' if color=='red' else 'rgba(0,255,0,0.1)'};
-                ">
-                    <strong>{code.split(' - ')[0]}</strong><br>
-                    <span style="font-size:0.8em">{code.split(' - ')[1]}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-        # Message Log Area
-        st.divider()
-        if logs:
-            st.error("### 🚨 ACTIVE TRIPS / ALARMS:")
-            for log in logs:
-                st.write(f"❌ {log}")
+        with st.form("vib_input_form"):
+            col_m, col_p = st.columns(2)
             
-            st.markdown("""
-            **Rekomendasi Tindakan:**
-            1. Cek fisik panel dan motor.
-            2. Jangan reset relay sebelum penyebab ditemukan.
-            3. Download rekaman gangguan (Fault Record).
-            """)
-        else:
-            st.success("### ✅ SYSTEM HEALTHY - NO ACTIVE FAULTS")
-            st.write("Semua parameter operasi berada dalam batas aman setting proteksi.")
+            # Helper input function
+            def v_in(label): return st.number_input(label, 0.0, 50.0, 0.5, 0.01)
+
+            with col_m:
+                st.markdown("#### ⚡ MOTOR (Driver)")
+                c1, c2, c3 = st.columns(3)
+                with c1: m_nde_h = v_in("NDE Horiz")
+                with c2: m_nde_v = v_in("NDE Vert")
+                with c3: m_nde_a = v_in("NDE Axial")
+                st.markdown("---")
+                c4, c5, c6 = st.columns(3)
+                with c4: m_de_h = v_in("DE Horiz")
+                with c5: m_de_v = v_in("DE Vert")
+                with c6: m_de_a = v_in("DE Axial")
+
+            with col_p:
+                st.markdown("#### 💧 POMPA (Driven)")
+                c7, c8, c9 = st.columns(3)
+                with c7: p_de_h = v_in("Pump DE Horiz")
+                with c8: p_de_v = v_in("Pump DE Vert")
+                with c9: p_de_a = v_in("Pump DE Axial")
+                st.markdown("---")
+                c10, c11, c12 = st.columns(3)
+                with c10: p_nde_h = v_in("Pump NDE Horiz")
+                with c11: p_nde_v = v_in("Pump NDE Vert")
+                with c12: p_nde_a = v_in("Pump NDE Axial")
+
+            st.markdown("#### Parameter Operasi")
+            co1, co2 = st.columns(2)
+            with co1: temp_bear = st.number_input("Bearing Temp (°C)", 0.0, 150.0, 60.0)
+            with co2: noise_chk = st.checkbox("Abnormal Noise Detected?")
+
+            submit_vib = st.form_submit_button("🔍 ANALYZE VIBRATION")
+
+        if submit_vib:
+            # 1. Collect Data
+            readings = [
+                VibrationReading("Motor NDE", "Horizontal", m_nde_h),
+                VibrationReading("Motor NDE", "Vertical", m_nde_v),
+                VibrationReading("Motor NDE", "Axial", m_nde_a),
+                VibrationReading("Motor DE", "Horizontal", m_de_h),
+                VibrationReading("Motor DE", "Vertical", m_de_v),
+                VibrationReading("Motor DE", "Axial", m_de_a),
+                VibrationReading("Pump DE", "Horizontal", p_de_h),
+                VibrationReading("Pump DE", "Vertical", p_de_v),
+                VibrationReading("Pump DE", "Axial", p_de_a),
+                VibrationReading("Pump NDE", "Horizontal", p_nde_h),
+                VibrationReading("Pump NDE", "Vertical", p_nde_v),
+                VibrationReading("Pump NDE", "Axial", p_nde_a),
+            ]
+            
+            # 2. Find Max & Status
+            max_reading = max(readings, key=lambda x: x.value)
+            iso_zone, color_hex = MechanicalEngine.get_iso_status(max_reading.value)
+            
+            # 3. Root Cause Analysis
+            roots = MechanicalEngine.analyze_root_cause(readings, warning_limit=Limits.ISO_CLASS_II[1])
+            if temp_bear > asset.mech.bearing_temp_limit:
+                roots.append(f"🔥 **OVERHEAT:** Bearing Temp {temp_bear}°C > {asset.mech.bearing_temp_limit}°C")
+            if noise_chk:
+                roots.append("🔊 **NOISE:** Indikasi kerusakan fisik / kavitasi.")
+
+            # 4. Display Dashboard
+            st.divider()
+            d1, d2 = st.columns([1, 2])
+            
+            with d1:
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number", value = max_reading.value,
+                    title = {'text': f"Max Severity ({iso_zone.name})"},
+                    gauge = {
+                        'axis': {'range': [0, 15]},
+                        'bar': {'color': "black"},
+                        'steps': [
+                            {'range': [0, 1.12], 'color': "#2ecc71"},
+                            {'range': [1.12, 2.80], 'color': "#f1c40f"},
+                            {'range': [2.80, 7.10], 'color': "#e67e22"},
+                            {'range': [7.10, 15], 'color': "#e74c3c"}
+                        ],
+                        'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': max_reading.value}
+                    }
+                ))
+                fig.update_layout(height=250, margin=dict(l=20,r=20,t=30,b=20))
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(f"📍 Location: {max_reading.location} - {max_reading.axis}")
+
+            with d2:
+                # Status Box
+                if iso_zone == ISOZone.A: st.success(f"### {iso_zone.value}")
+                elif iso_zone == ISOZone.B: st.warning(f"### {iso_zone.value}")
+                elif iso_zone == ISOZone.C: st.error(f"### {iso_zone.value}")
+                else: st.error(f"### 🚨 {iso_zone.value}")
+
+                st.markdown("#### 🧠 AI Root Cause Analysis:")
+                if roots:
+                    for r in roots: st.write(f"- {r}")
+                else:
+                    st.write("- Pola vibrasi normal. Tidak ada indikasi kerusakan spesifik.")
+
+    # ==========================================
+    # TAB 2: ELECTRICAL PROTECTION
+    # ==========================================
+    with tab_elec:
+        st.subheader(f"Protection Relay Simulation: {asset.name}")
+        st.caption("Simulasi respons relay terhadap input arus/tegangan. (Ref: ANSI/IEEE C37.2)")
+
+        with st.form("elec_input"):
+            ec1, ec2, ec3 = st.columns(3)
+            with ec1:
+                st.markdown("### ⚡ Voltage (V)")
+                v1 = st.number_input("V L1-L2", 0.0, 1000.0, asset.elec.rated_volt)
+                v2 = st.number_input("V L2-L3", 0.0, 1000.0, asset.elec.rated_volt)
+                v3 = st.number_input("V L3-L1", 0.0, 1000.0, asset.elec.rated_volt)
+            with ec2:
+                st.markdown("### 🔌 Current (A)")
+                # Default value 80% load
+                def_curr = asset.elec.flc_amps * 0.8
+                i1 = st.number_input("I Phase 1", 0.0, 1000.0, def_curr)
+                i2 = st.number_input("I Phase 2", 0.0, 1000.0, def_curr)
+                i3 = st.number_input("I Phase 3", 0.0, 1000.0, def_curr)
+                ig = st.number_input("I Ground (Zero Seq)", 0.0, 100.0, 0.0)
+            with ec3:
+                st.markdown("### ⚙️ Stats")
+                starts = st.number_input("Starts/Hour", 0, 10, 1)
+                temp_wind = st.number_input("Winding Temp (°C)", 20.0, 200.0, 65.0)
+                status_m = st.radio("Motor State", ["Running", "Starting", "Stopped"])
+
+            submit_elec = st.form_submit_button("🔍 ANALYZE PROTECTION")
+
+        if submit_elec:
+            engine = ElectricalEngine(asset.elec)
+            logs, unbal = engine.analyze([v1,v2,v3], [i1,i2,i3], ig, starts, temp_wind, status_m)
+
+            st.divider()
+            
+            # ANSI Code Grid Visualization
+            st.markdown("#### Relay Status Indicators (ANSI Device Codes)")
+            
+            # Helper to check if code is triggered
+            def check_code(code_str):
+                return "red" if any(code_str.split(' - ')[0] in s for s in logs) else "green"
+
+            # Grid Layout
+            cols = st.columns(4)
+            ansi_list = [ANSI.UV_27, ANSI.OV_59, ANSI.IOC_50, ANSI.TOC_51, 
+                         ANSI.UC_37, ANSI.UB_46, ANSI.GF_50N, ANSI.TH_49]
+            
+            for i, code in enumerate(ansi_list):
+                color = check_code(code)
+                with cols[i % 4]:
+                    st.markdown(f"""
+                    <div style="
+                        border: 2px solid {color}; border-radius: 5px; padding: 10px;
+                        text-align: center; margin-bottom: 10px;
+                        background-color: {'rgba(255,0,0,0.1)' if color=='red' else 'rgba(0,255,0,0.1)'};
+                    ">
+                        <strong>{code.split(' - ')[0]}</strong><br>
+                        <span style="font-size:0.7em">{code.split(' - ')[1]}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Logs & Recommendation
+            st.divider()
+            el_c1, el_c2 = st.columns([2,1])
+            
+            with el_c1:
+                if logs:
+                    st.error("### 🚨 ACTIVE FAULTS DETECTED:")
+                    for l in logs: st.write(f"❌ {l}")
+                else:
+                    st.success("### ✅ SYSTEM HEALTHY")
+                    st.write("Semua parameter listrik dalam batas aman.")
+
+            with el_c2:
+                st.markdown("**Electrical Metrics:**")
+                st.metric("Avg Voltage", f"{np.mean([v1,v2,v3]):.1f} V")
+                st.metric("Avg Current", f"{np.mean([i1,i2,i3]):.1f} A")
+                st.metric("Unbalance", f"{unbal:.2f} %", delta_color="inverse", 
+                          delta="High" if unbal > Limits.UNBALANCE_ALARM else "Normal")
+
+            if logs:
+                st.info("""
+                **Standard Operating Procedure (SOP) saat Trip:**
+                1. 🛑 **JANGAN RESET** relay sebelum inspeksi visual.
+                2. 🔍 Cek fisik panel (bau hangus/flashover).
+                3. 📥 Download **Fault Record** dari relay untuk investigasi.
+                """)
+
+    # ==========================================
+    # TAB 3: COMMISSIONING
+    # ==========================================
+    with tab_comm:
+        st.subheader("Site Acceptance Test (API 686)")
+        st.caption("Gunakan ini saat instalasi pompa baru atau setelah overhaul besar.")
+        
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.markdown("#### 1. Soft Foot Check")
+            soft_foot_val = st.number_input("Max Soft Foot (mm)", 0.00, 1.00, 0.00, 0.01)
+            st.caption(f"Limit API 686: {Limits.MAX_SOFT_FOOT} mm")
+            
+        with col_c2:
+            st.markdown("#### 2. Alignment Check")
+            v_off = st.number_input("Vertical Offset (mm)", -1.0, 1.0, 0.00, 0.01)
+            h_off = st.number_input("Horizontal Offset (mm)", -1.0, 1.0, 0.00, 0.01)
+            st.caption(f"Limit Tolerance: {Limits.ALIGNMENT_TOLERANCE} mm")
+
+        chk_grout = st.checkbox("Grouting Cured & Sound?")
+        chk_pipe = st.checkbox("Pipe Strain Free?")
+        
+        if st.button("✅ VALIDATE INSTALLATION"):
+            comm_res = CommissioningEngine.check_installation(soft_foot_val, v_off, h_off)
+            
+            if not chk_grout: comm_res.append("❌ Grouting check pending.")
+            if not chk_pipe: comm_res.append("❌ Pipe strain check pending.")
+            
+            st.divider()
+            if any("❌" in s for s in comm_res):
+                st.error("### ⛔ COMMISSIONING FAILED")
+                for r in comm_res: st.write(r)
+            else:
+                st.success("### 🎉 COMMISSIONING PASSED")
+                st.write("Instalasi memenuhi standar API 686. Siap untuk Start-up.")
 
 if __name__ == "__main__":
     main()
