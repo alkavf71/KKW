@@ -257,7 +257,7 @@ def main():
     st.set_page_config(page_title="Industrial Reliability Suite", layout="wide", page_icon="🏭")
     
     # --- HEADER ---
-    st.title("🛡️ Digital Reliability & Protection Dashboard")
+    st.title("🛡️ Under Construction")
     st.markdown("Integrated Mechanical (ISO/API) & Electrical (ANSI/IEEE) Analysis System")
     st.markdown("---")
 
