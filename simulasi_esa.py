@@ -213,24 +213,34 @@ class MechanicalEngine:
         if not problem_points:
             return []
 
-        # Logic TKI C-017 / ISO 18436
-        # 1. Misalignment (Tinggi di Axial)
-        if any(r.axis == "Axial" and r.value > warning_limit for r in problem_points):
-            causes.append("🔴 **MISALIGNMENT:** Vibrasi dominan di arah Axial (Cek Kopling).")
+        # LOGIKA TKI C-017 TABEL 1 (Deterministik)
         
-        # 2. Unbalance (Tinggi di Horizontal/Radial)
-        # Cek jika Horizontal tinggi tapi Axial rendah
+        # 1. Cek MISALIGNMENT (Dominan Axial pada Coupling Side/DE)
+        # TKI C-017: Getaran tinggi arah Axial pada Motor/Pump DE indikasi Misalignment
+        if any(r.axis == "Axial" and "DE" in r.location and r.value > warning_limit for r in problem_points):
+            causes.append("🔴 **MISALIGNMENT (Ref: TKI C-017):** Dominan Axial pada sisi DE. Cek kelurusan kopling.")
+        
+        # 2. Cek UNBALANCE (Dominan Radial/Horizontal)
+        # TKI C-017: Getaran tinggi arah Radial indikasi Unbalance
         high_horiz = [r for r in problem_points if r.axis == "Horizontal"]
         high_axial = [r for r in problem_points if r.axis == "Axial"]
         
-        if high_horiz and not high_axial:
-            causes.append("🟠 **UNBALANCE:** Vibrasi dominan di arah Radial (Cek Impeller/Rotor).")
+        # Jika Horizontal tinggi DAN lebih tinggi dari Axial
+        if high_horiz:
+            # Cek apakah Horizontal > Axial (Sifat Unbalance murni)
+            if not high_axial or (max(h.value for h in high_horiz) > max(a.value for a in high_axial)):
+                causes.append("🟠 **UNBALANCE (Ref: TKI C-017):** Dominan Radial. Cek kebersihan impeller/rotor.")
 
-        # 3. Looseness (Tinggi di Vertikal)
+        # 3. Cek LOOSENESS / SOFT FOOT (Dominan Vertikal)
+        # Umumnya kelonggaran baut pondasi menyebabkan getaran vertikal tinggi
         if any(r.axis == "Vertical" and r.value > warning_limit for r in problem_points):
-             causes.append("🔧 **MECHANICAL LOOSENESS:** Vibrasi tinggi di arah Vertikal (Cek Baut Pondasi).")
+             causes.append("🔧 **LOOSENESS (Ref: TKI C-017):** Dominan Vertikal. Cek baut pondasi / soft foot.")
 
-        return list(set(causes)) # Remove duplicates
+        # 4. Cek BEARING (Pump NDE)
+        if any("Pump NDE" in r.location and r.value > warning_limit for r in problem_points):
+            causes.append("🔩 **BEARING/FLOW (Ref: TKI C-017):** Vibrasi tinggi di ujung pompa (NDE).")
+
+        return list(set(causes))
 
 class CommissioningEngine:
     """Validasi API 686"""
