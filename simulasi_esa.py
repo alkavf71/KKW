@@ -1,305 +1,306 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
+from datetime import datetime
 from enum import Enum
 
 # ==========================================
-# 1. KONFIGURASI & STANDAR (The "Brain")
+# 1. STANDARDS LIBRARY (HARD CODES)
 # ==========================================
+class StandardLimit:
+    # IEC 60034-1: Rotating Electrical Machines
+    MAX_CURRENT_UNBALANCE_PCT = 5.0  # Industry practice (NEMA MG1 allows 10%, IEC stricter)
+    MAX_VOLTAGE_UNBALANCE_PCT = 1.0  # IEC 60034-1
+    
+    # IEEE 43: Insulation Resistance
+    MIN_PI_CLASS_F = 2.0  # Polarization Index min for Class F insulation
+    MIN_IR_1MIN = 100.0   # M-Ohm (Conservative limit for 400V motors)
 
-class ISOZone(Enum):
-    A = "GOOD (Zone A)"
-    B = "SATISFACTORY (Zone B)"
-    C = "UNSATISFACTORY (Zone C)"
-    D = "UNACCEPTABLE (Zone D)"
+    # API 610: Centrifugal Pumps
+    # Vibration limits based on Region (Preferred vs Allowable)
+    API_VIB_PREFERRED = 3.0  # mm/s RMS
+    API_VIB_ALLOWABLE = 5.0  # mm/s RMS (Site Acceptance Limit)
+
+# ==========================================
+# 2. DATA STRUCTURES (INDUSTRIAL GRADE)
+# ==========================================
+@dataclass
+class ElectricalSpecs:
+    rated_voltage: float  # Volts
+    rated_current: float  # Amps (FLA)
+    phase: int = 3
+    insulation_class: str = "F"
+    service_factor: float = 1.15
 
 @dataclass
-class AssetData:
+class MechanicalSpecs:
+    power_kw: float
+    rpm_design: int
+    pump_type: str  # 'Overhung', 'Between Bearings', etc.
+    coupling_type: str
+    api_plan: str   # e.g., "Plan 53A"
+
+@dataclass
+class Asset:
     tag: str
     name: str
     location: str
-    power_kw: float
-    rpm: int
-    mounting: str = "Rigid"
-    
-    @property
-    def machine_class(self) -> str:
-        # Logika Penentuan Class ISO 10816-1
-        # Class I: < 15 kW
-        # Class II: 15 - 300 kW (Mayoritas Pompa Anda)
-        # Class III: > 300 kW (Rigid)
-        if self.power_kw <= 15: return "Class I"
-        elif self.power_kw <= 300: return "Class II"
-        else: return "Class III"
+    mech: MechanicalSpecs
+    elec: ElectricalSpecs
+    commissioning_date: str
 
-@dataclass
-class VibrationReading:
-    location: str  # e.g., "Motor DE"
-    axis: str      # e.g., "Horizontal"
-    value: float   # RMS mm/s
-
-@dataclass
-class DiagnosticResult:
-    max_vibration: float
-    max_location: str
-    iso_zone: ISOZone
-    color_code: str
-    root_causes: List[str]
-    recommendations: List[str]
-
-class ReliabilityEngine:
-    """
-    Mesin Logika Utama. 
-    Menggabungkan standar ISO 10816 (Severity) dan TKI C-017 (Root Cause).
-    """
-    
-    # Limit Vibrasi ISO 10816-1 (Zone Boundary)
-    # Format: [Limit A/B, Limit B/C, Limit C/D]
-    ISO_LIMITS = {
-        "Class I":  [0.71, 1.80, 4.50],
-        "Class II": [1.12, 2.80, 7.10], # Standar TKI C-04 Anda
-        "Class III":[1.80, 4.50, 11.20]
-    }
-
-    @staticmethod
-    def get_zone(value: float, machine_class: str) -> tuple[ISOZone, str]:
-        limits = ReliabilityEngine.ISO_LIMITS.get(machine_class, ReliabilityEngine.ISO_LIMITS["Class II"])
-        
-        if value <= limits[0]:
-            return ISOZone.A, "#2ecc71" # Green
-        elif value <= limits[1]:
-            return ISOZone.B, "#f1c40f" # Yellow
-        elif value <= limits[2]:
-            return ISOZone.C, "#e67e22" # Orange
-        else:
-            return ISOZone.D, "#e74c3c" # Red
-
-    @staticmethod
-    def diagnose(readings: List[VibrationReading], machine_class: str, temp: float, visual_issues: List[str]) -> DiagnosticResult:
-        # 1. Cari Nilai MAX (Worst Case Severity)
-        max_reading = max(readings, key=lambda x: x.value)
-        zone, color = ReliabilityEngine.get_zone(max_reading.value, machine_class)
-        
-        # 2. Analisa Root Cause (Algoritma TKI C-017)
-        causes = []
-        
-        # Filter titik yang bermasalah saja (> Limit Zone B/Warning)
-        warning_limit = ReliabilityEngine.ISO_LIMITS[machine_class][1] # 2.80 mm/s for Class II
-        problematic_points = [r for r in readings if r.value > warning_limit]
-        
-        if not problematic_points and zone in [ISOZone.A, ISOZone.B]:
-             causes.append("Kondisi mesin normal. Tidak ada pola kerusakan dominan.")
-        else:
-            # Pola 1: Misalignment (Dominan di Axial)
-            high_axial = any(r.value > warning_limit and r.axis == "Axial" for r in problematic_points)
-            if high_axial:
-                causes.append("🔴 **MISALIGNMENT (Indikasi Kuat):** Terdeteksi vibrasi tinggi pada arah Axial. Cek kelurusan kopling.")
-
-            # Pola 2: Unbalance (Dominan di Radial - Horizontal)
-            high_horiz = any(r.value > warning_limit and r.axis == "Horizontal" for r in problematic_points)
-            if high_horiz and not high_axial:
-                causes.append("🟠 **UNBALANCE / LOOSENESS:** Vibrasi dominan di arah Radial. Cek kekencangan baut atau kebersihan impeller.")
-
-            # Pola 3: Masalah Mekanis Pompa
-            pump_issue = any("Pump" in r.location and r.value > warning_limit for r in problematic_points)
-            if pump_issue:
-                causes.append("🔵 **PUMP END ISSUE:** Gangguan pada sisi pompa. Cek Bearing Pompa atau indikasi Kavitasi.")
-
-        # 3. Analisa Tambahan (Suhu & Visual)
-        if temp > 85: # Limit TKI C-04
-            causes.append(f"🔥 **OVERHEAT:** Suhu bearing {temp}°C melebihi batas 85°C.")
-        
-        for issue in visual_issues:
-            causes.append(f"👁️ **VISUAL:** {issue}")
-
-        # 4. Generate Rekomendasi
-        recs = []
-        if zone == ISOZone.D:
-            recs.append("STOP OPERASI SEGERA. Risiko kerusakan fatal.")
-            recs.append("Lakukan pengecekan poros dan bearing secara fisik.")
-        elif zone == ISOZone.C:
-            recs.append("Jadwalkan perbaikan dalam waktu < 7 hari.")
-            recs.append("Pantau vibrasi setiap hari.")
-        else:
-            recs.append("Lanjutkan pemeliharaan rutin sesuai TKI C-04.")
-
-        return DiagnosticResult(
-            max_vibration=max_reading.value,
-            max_location=f"{max_reading.location} - {max_reading.axis}",
-            iso_zone=zone,
-            color_code=color,
-            root_causes=causes,
-            recommendations=recs
-        )
-
-# ==========================================
-# 2. DATABASE ASET (Mockup Data)
-# ==========================================
+# Database Aset (Mockup - Bisa diganti SQL Database)
 ASSETS_DB = {
-    "P-02": AssetData("0459599", "Pompa Pertalite", "FT Moutong", 18.5, 2900),
-    "733-P-103": AssetData("1041535A", "Pompa Bio Solar", "FT Luwuk", 30.0, 2900),
-    "706-P-203": AssetData("Unknown", "Pompa LPG", "IT Makassar", 45.0, 2950),
+    "P-02": Asset(
+        "0459599", "Pompa Pertalite", "FT Moutong",
+        MechanicalSpecs(18.5, 2900, "Overhung", "Flexible", "Plan 11"),
+        ElectricalSpecs(380, 35.5, 3, "F", 1.15),
+        "2004-01-01"
+    ),
+    "733-P-103": Asset(
+        "1041535A", "Pompa Bio Solar", "FT Luwuk",
+        MechanicalSpecs(30.0, 2900, "Overhung", "Spacer", "Plan 11/52"),
+        ElectricalSpecs(400, 54.0, 3, "F", 1.15),
+        "2014-06-20"
+    ),
+    "706-P-203": Asset(
+        "049-1611186", "Pompa LPG", "IT Makassar",
+        MechanicalSpecs(15.0, 2955, "Overhung", "Magnetic", "Plan 53B"),
+        ElectricalSpecs(380, 28.5, 3, "F", 1.0),
+        "2017-01-19"
+    )
 }
 
 # ==========================================
-# 3. USER INTERFACE (Streamlit)
+# 3. CALCULATION ENGINES (LOGIC LAYER)
 # ==========================================
-
-def main():
-    st.set_page_config(page_title="Industrial Pump Diagnoser", layout="wide", page_icon="⚙️")
-    
-    st.title("🛡️ Industrial Reliability Assistant")
-    st.markdown("Diagnosa Kesehatan Pompa Berbasis Standar **ISO 10816-3** & **TKI Pertamina**")
-    
-    # --- Sidebar: Asset Selection ---
-    with st.sidebar:
-        st.header("Konfigurasi Aset")
-        selected_id = st.selectbox("Pilih Aset:", list(ASSETS_DB.keys()))
-        asset = ASSETS_DB[selected_id]
+class ElectricalAnalyzer:
+    @staticmethod
+    def calculate_unbalance(ph1: float, ph2: float, ph3: float) -> tuple[float, float, str]:
+        """
+        Menghitung Unbalance sesuai NEMA MG-1 / IEC.
+        Formula: Max Deviation from Avg / Avg * 100
+        """
+        avg = (ph1 + ph2 + ph3) / 3
+        if avg == 0: return 0.0, 0.0, "OFF"
         
+        max_dev = max(abs(ph1 - avg), abs(ph2 - avg), abs(ph3 - avg))
+        unbalance_pct = (max_dev / avg) * 100
+        
+        status = "NORMAL"
+        if unbalance_pct > StandardLimit.MAX_CURRENT_UNBALANCE_PCT:
+            status = "CRITICAL (High Unbalance)"
+        elif unbalance_pct > (StandardLimit.MAX_CURRENT_UNBALANCE_PCT / 2):
+            status = "WARNING"
+            
+        return avg, unbalance_pct, status
+
+    @staticmethod
+    def analyze_insulation(ir_1min: float, ir_10min: float) -> tuple[float, str]:
+        """
+        Menghitung Polarization Index (PI) sesuai IEEE 43.
+        PI = R_10min / R_1min
+        """
+        if ir_1min == 0: return 0.0, "INVALID"
+        pi_val = ir_10min / ir_1min
+        
+        if pi_val >= StandardLimit.MIN_PI_CLASS_F:
+            return pi_val, "PASS (Good Insulation)"
+        elif pi_val >= 1.5:
+            return pi_val, "WARNING (Aging Insulation)"
+        else:
+            return pi_val, "FAIL (Brittle/Wet Insulation)"
+
+class CommissioningValidator:
+    """
+    Validasi berdasarkan API 686 (Installation) & API 610 (Performance).
+    """
+    @staticmethod
+    def check_alignment(offset_vertical: float, offset_horizontal: float, rpm: int) -> str:
+        # Toleransi umum alignment (rule of thumb based on API 686 for 3000 RPM)
+        # 0.05 mm untuk offset
+        limit = 0.05 
+        max_offset = max(abs(offset_vertical), abs(offset_horizontal))
+        
+        if max_offset <= limit:
+            return "ACCEPTABLE (Within API 686 Tolerance)"
+        else:
+            return f"REJECTED (Offset {max_offset}mm > Limit {limit}mm)"
+
+# ==========================================
+# 4. FRONTEND (STREAMLIT UI)
+# ==========================================
+def main():
+    st.set_page_config(page_title="Industrial Reliability Suite", layout="wide", page_icon="🏭")
+    
+    # --- Sidebar ---
+    st.sidebar.title("🏭 Reliability Suite")
+    st.sidebar.markdown("**Standard Compliance:**\n- API 610 / 686\n- ISO 10816-3\n- IEC 60034-1 / IEEE 43")
+    
+    selected_tag = st.sidebar.selectbox("Select Asset Tag:", list(ASSETS_DB.keys()))
+    asset = ASSETS_DB[selected_tag]
+    
+    # Asset Info Card
+    with st.sidebar:
         st.info(f"""
-        **Asset Profile:**
-        \n🏷️ Tag: `{asset.tag}`
-        \n📍 Loc: `{asset.location}`
-        \n⚡ Power: `{asset.power_kw} kW` ({asset.machine_class})
+        **{asset.name}**
+        \n📍 {asset.location}
+        \n⚡ {asset.elec.rated_voltage}V / {asset.elec.rated_current}A
+        \n⚙️ {asset.mech.power_kw} kW / {asset.mech.rpm_design} RPM
         """)
         
-        inspector = st.text_input("Inspector Name:", "Petugas Lapangan")
-
-    # --- Main Form: Industrial Grid Layout ---
-    st.subheader(f"📝 Input Data Inspeksi: {asset.name}")
+    # --- Main Dashboard ---
+    st.title(f"Dashboard Pengujian: {asset.tag}")
     
-    with st.form("industrial_input_form"):
-        st.markdown("### 1. Vibration Data Acquisition (Velocity mm/s RMS)")
-        st.caption("Masukkan data sesuai pembacaan alat. Desimal menggunakan titik (.)")
+    # Tabs Structure
+    tab_comm, tab_elec, tab_vib = st.tabs([
+        "🚀 Commissioning (API 686)", 
+        "⚡ Electrical Analysis (IEC/IEEE)", 
+        "🌊 Vibration & Mechanical (ISO/API)"
+    ])
 
-        # Container untuk input
-        c_motor, c_pump = st.columns(2)
+    # === TAB 1: COMMISSIONING (API 686) ===
+    with tab_comm:
+        st.header("Site Acceptance Test (SAT) Protocol")
+        st.caption("Referensi: API 686 Chapter 7 - Installation & Commissioning")
         
-        # Helper function untuk membuat input field dengan cepat
-        def vib_input(label, key):
-            return st.number_input(label, min_value=0.0, max_value=50.0, step=0.01, key=key)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("1. Shaft Alignment Check")
+            align_v = st.number_input("Vertical Offset (mm):", -1.0, 1.0, 0.00, step=0.01)
+            align_h = st.number_input("Horizontal Offset (mm):", -1.0, 1.0, 0.00, step=0.01)
+            align_status = CommissioningValidator.check_alignment(align_v, align_h, asset.mech.rpm_design)
+            
+            if "REJECTED" in align_status:
+                st.error(align_status)
+            else:
+                st.success(align_status)
 
-        with c_motor:
-            st.markdown("#### ⚡ DRIVER (Motor)")
-            c1, c2, c3 = st.columns(3)
-            with c1: m_nde_h = vib_input("NDE Horiz", "m_nde_h")
-            with c2: m_nde_v = vib_input("NDE Vert", "m_nde_v")
-            with c3: m_nde_a = vib_input("NDE Axial", "m_nde_a")
-            st.markdown("---")
-            c4, c5, c6 = st.columns(3)
-            with c4: m_de_h = vib_input("DE Horiz", "m_de_h")
-            with c5: m_de_v = vib_input("DE Vert", "m_de_v")
-            with c6: m_de_a = vib_input("DE Axial", "m_de_a")
+        with c2:
+            st.subheader("2. Soft Foot Check")
+            soft_foot = st.number_input("Max Soft Foot (mm):", 0.00, 1.00, 0.00, step=0.01)
+            if soft_foot > 0.05: # API 686 limit
+                st.error(f"FAIL: Soft foot {soft_foot}mm > 0.05mm (API 686 Limit)")
+            else:
+                st.success("PASS: Soft foot within tolerance.")
 
-        with c_pump:
-            st.markdown("#### 💧 DRIVEN (Pump)")
-            c7, c8, c9 = st.columns(3)
-            with c7: p_de_h = vib_input("DE Horiz", "p_de_h")
-            with c8: p_de_v = vib_input("DE Vert", "p_de_v")
-            with c9: p_de_a = vib_input("DE Axial", "p_de_a")
-            st.markdown("---")
-            c10, c11, c12 = st.columns(3)
-            with c10: p_nde_h = vib_input("NDE Horiz", "p_nde_h")
-            with c11: p_nde_v = vib_input("NDE Vert", "p_nde_v")
-            with c12: p_nde_a = vib_input("NDE Axial", "p_nde_a")
-
-        st.markdown("### 2. Operational Parameters")
-        col_op1, col_op2 = st.columns(2)
-        with col_op1:
-            temp_bearing = st.number_input("Max Bearing Temp (°C):", 0.0, 150.0, step=0.1)
-        with col_op2:
-            visual_check = st.multiselect("Temuan Visual (TKI Checklist):", 
-                ["Baut Kendor", "Kebocoran Seal", "Suara Abnormal (Noise)", "Grounding Lepas", "Coating Rusak"])
-
-        submit_btn = st.form_submit_button("🚀 RUN DIAGNOSTIC ANALYSIS")
-
-    # --- Processing & Output ---
-    if submit_btn:
-        # 1. Agregasi Data ke Objek VibrationReading
-        readings = [
-            VibrationReading("Motor NDE", "Horizontal", m_nde_h),
-            VibrationReading("Motor NDE", "Vertical", m_nde_v),
-            VibrationReading("Motor NDE", "Axial", m_nde_a),
-            VibrationReading("Motor DE", "Horizontal", m_de_h),
-            VibrationReading("Motor DE", "Vertical", m_de_v),
-            VibrationReading("Motor DE", "Axial", m_de_a),
-            VibrationReading("Pump DE", "Horizontal", p_de_h),
-            VibrationReading("Pump DE", "Vertical", p_de_v),
-            VibrationReading("Pump DE", "Axial", p_de_a),
-            VibrationReading("Pump NDE", "Horizontal", p_nde_h),
-            VibrationReading("Pump NDE", "Vertical", p_nde_v),
-            VibrationReading("Pump NDE", "Axial", p_nde_a),
-        ]
-
-        # 2. Jalankan Engine Diagnosa
-        result = ReliabilityEngine.diagnose(
-            readings=readings,
-            machine_class=asset.machine_class,
-            temp=temp_bearing,
-            visual_issues=visual_check
-        )
-
-        # 3. Tampilkan Hasil Dashboard
         st.divider()
-        st.markdown("## 📊 Diagnostic Report")
+        st.subheader("3. Pre-Start Checklist (API 686)")
+        chk_1 = st.checkbox("Grouting cured & sound (Ketuk pondasi)")
+        chk_2 = st.checkbox("Pipe Strain Free (Flange sejajar tanpa paksaan)")
+        chk_3 = st.checkbox(f"Auxiliary Systems (Lube Oil/Seal {asset.mech.api_plan}) Ready")
+        chk_4 = st.checkbox("Coupling Guard Installed")
         
-        # Kolom Layout Hasil
-        col_res_left, col_res_right = st.columns([1, 2])
+        if chk_1 and chk_2 and chk_3 and chk_4:
+            st.success("✅ READY FOR START-UP")
+        else:
+            st.warning("⚠️ Pending Checklist Items")
+
+    # === TAB 2: ELECTRICAL (IEC/IEEE) ===
+    with tab_elec:
+        st.header("Electrical Health Assessment")
         
-        with col_res_left:
-            # Gauge Chart Plotly
+        # Section A: Power Quality
+        st.markdown("### A. Power Analysis (IEC 60034-1)")
+        ce1, ce2, ce3, ce4 = st.columns(4)
+        with ce1: l1 = st.number_input("Current L1 (Amp):", 0.0, 500.0, asset.elec.rated_current)
+        with ce2: l2 = st.number_input("Current L2 (Amp):", 0.0, 500.0, asset.elec.rated_current)
+        with ce3: l3 = st.number_input("Current L3 (Amp):", 0.0, 500.0, asset.elec.rated_current)
+        
+        avg_amp, unbal_pct, amp_status = ElectricalAnalyzer.calculate_unbalance(l1, l2, l3)
+        
+        with ce4:
+            st.metric("Avg Current", f"{avg_amp:.1f} A")
+            st.metric("Unbalance", f"{unbal_pct:.2f} %")
+        
+        # Load Calculation
+        load_pct = (avg_amp / asset.elec.rated_current) * 100
+        st.progress(min(load_pct/150, 1.0), text=f"Motor Load: {load_pct:.1f}% of FLA")
+        
+        if load_pct > 100 * asset.elec.service_factor:
+            st.error(f"🚨 OVERLOAD: Load melebihi Service Factor ({asset.elec.service_factor})")
+        elif "CRITICAL" in amp_status:
+            st.error(f"🚨 {amp_status}: Cek koneksi kabel atau lilitan stator (IEC Limit < {StandardLimit.MAX_CURRENT_UNBALANCE_PCT}%)")
+        elif "WARNING" in amp_status:
+            st.warning(f"⚠️ {amp_status}: Unbalance terdeteksi.")
+        else:
+            st.success("✅ Power Condition Optimal")
+
+        # Section B: Insulation Resistance (IEEE 43)
+        st.divider()
+        st.markdown("### B. Insulation Resistance (Megger Test - IEEE 43)")
+        ci1, ci2 = st.columns(2)
+        with ci1: ir_1 = st.number_input("IR @ 1 Min (MΩ):", 0.0, 5000.0, 200.0)
+        with ci2: ir_10 = st.number_input("IR @ 10 Min (MΩ):", 0.0, 5000.0, 600.0)
+        
+        pi_val, pi_msg = ElectricalAnalyzer.analyze_insulation(ir_1, ir_10)
+        
+        c_pi1, c_pi2 = st.columns([1,3])
+        with c_pi1:
+            st.metric("Polarization Index (PI)", f"{pi_val:.2f}")
+        with c_pi2:
+            if "PASS" in pi_msg: st.success(pi_msg)
+            elif "WARNING" in pi_msg: st.warning(pi_msg)
+            else: st.error(pi_msg)
+            st.caption("*IEEE 43 Std: PI > 2.0 diperlukan untuk Class F Insulation*")
+
+    # === TAB 3: VIBRATION (ISO/API) ===
+    with tab_vib:
+        st.header("Vibration Analysis (API 610 / ISO 10816)")
+        st.info("NOTE: Sistem menggunakan nilai MAKSIMUM dari setiap titik ukur untuk menentukan keparahan, bukan rata-rata.")
+        
+        # Input Grid yang ringkas
+        with st.form("vib_form"):
+            col_m, col_p = st.columns(2)
+            with col_m:
+                st.markdown("#### ⚡ Motor (Driver)")
+                m_de = st.number_input("Motor DE Max (mm/s):", 0.0, 50.0, 0.5)
+                m_nde = st.number_input("Motor NDE Max (mm/s):", 0.0, 50.0, 0.5)
+            with col_p:
+                st.markdown("#### 💧 Pompa (Driven)")
+                p_de = st.number_input("Pump DE Max (mm/s):", 0.0, 50.0, 0.5)
+                p_nde = st.number_input("Pump NDE Max (mm/s):", 0.0, 50.0, 0.5)
+            
+            submit_vib = st.form_submit_button("Analisa Vibrasi")
+            
+        if submit_vib:
+            # Logic Max Value
+            max_v = max(m_de, m_nde, p_de, p_nde)
+            
+            # API 610 Logic for Commissioning
+            if max_v <= StandardLimit.API_VIB_PREFERRED:
+                status = "PREFERRED OPERATING REGION"
+                color = "green"
+            elif max_v <= StandardLimit.API_VIB_ALLOWABLE:
+                status = "ALLOWABLE OPERATING REGION (Acceptable for SAT)"
+                color = "orange"
+            else:
+                status = "REJECTED / OUTSIDE LIMITS"
+                color = "red"
+                
+            # Gauge Visualization
             fig = go.Figure(go.Indicator(
                 mode = "gauge+number",
-                value = result.max_vibration,
-                title = {'text': "Max Severity (mm/s)"},
+                value = max_v,
+                title = {'text': f"Max Vibration ({status})"},
                 gauge = {
-                    'axis': {'range': [0, 15]},
+                    'axis': {'range': [0, 10]},
                     'bar': {'color': "black"},
                     'steps': [
-                        {'range': [0, 1.12], 'color': "#2ecc71"},
-                        {'range': [1.12, 2.80], 'color': "#f1c40f"},
-                        {'range': [2.80, 7.10], 'color': "#e67e22"},
-                        {'range': [7.10, 15], 'color': "#e74c3c"}
+                        {'range': [0, 3.0], 'color': "#2ecc71"},
+                        {'range': [3.0, 5.0], 'color': "#f1c40f"},
+                        {'range': [5.0, 10.0], 'color': "#e74c3c"}
                     ],
-                    'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': result.max_vibration}
+                    'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': max_v}
                 }
             ))
-            fig.update_layout(height=300, margin=dict(l=20,r=20,t=50,b=20))
             st.plotly_chart(fig, use_container_width=True)
             
-            st.caption(f"📍 Critical Point: **{result.max_location}**")
-
-        with col_res_right:
-            # Status Box
-            if result.iso_zone == ISOZone.A:
-                st.success(f"### {result.iso_zone.value}")
-            elif result.iso_zone == ISOZone.B:
-                st.warning(f"### {result.iso_zone.value}")
-            elif result.iso_zone == ISOZone.C:
-                st.error(f"### {result.iso_zone.value}") # Streamlit ga punya orange box, pake error/warning
-            else:
-                st.error(f"### 🚨 {result.iso_zone.value}")
-
-            # Root Causes List
-            st.markdown("#### 🔍 Root Cause Analysis (AI Based)")
-            if result.root_causes:
-                for rc in result.root_causes:
-                    st.write(f"- {rc}")
-            else:
-                st.write("- Tidak ada anomali spesifik terdeteksi.")
-
-            # Recommendations
-            st.markdown("#### 🛠️ Action Plan")
-            for rec in result.recommendations:
-                st.write(f"1. {rec}")
-
-        # 4. Data Table (Expandable)
-        with st.expander("Lihat Detail Data Mentah"):
-            df_raw = pd.DataFrame([vars(r) for r in readings])
-            st.dataframe(df_raw, use_container_width=True)
+            if color == "red":
+                st.error("🚨 VIBRATION REJECTED: Cek Alignment, Soft Foot, atau Unbalance segera.")
 
 if __name__ == "__main__":
     main()
