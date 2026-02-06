@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from enum import Enum
 from datetime import datetime
 import os
@@ -12,10 +12,7 @@ import os
 # 1. STANDARDS & CONSTANTS LIBRARY
 # ==========================================
 class ANSI:
-    """
-    IEEE C37.2 Standard Device Numbers
-    Digunakan untuk referensi Proteksi Elektrikal Migas & TKI.
-    """
+    """IEEE C37.2 Standard Device Numbers"""
     UV_27 = "27 - Undervoltage"
     UC_37 = "37 - Undercurrent (Dry Run)"
     UB_46 = "46 - Current Unbalance"
@@ -36,23 +33,22 @@ class ISOZone(Enum):
     D = "UNACCEPTABLE (Zone D)"
 
 class Limits:
-    # --- ELECTRICAL (IEC 60034 / NEMA MG-1) ---
-    VOLTAGE_UNBALANCE_TRIP = 3.0  # % (NEMA)
-    CURRENT_UNBALANCE_ALARM = 5.0  # %
-    CURRENT_UNBALANCE_TRIP = 10.0  # %
+    # --- ELECTRICAL ---
+    VOLTAGE_UNBALANCE_TRIP = 3.0
+    CURRENT_UNBALANCE_ALARM = 5.0
+    CURRENT_UNBALANCE_TRIP = 10.0
     
     # --- MECHANICAL (ISO 10816-3 Group 2 Rigid) ---
-    # TKI C-04 Limits:
-    VIB_WARN = 2.80 # mm/s (Batas B ke C)
-    VIB_TRIP = 7.10 # mm/s (Batas C ke D)
+    VIB_WARN = 2.80 
+    VIB_TRIP = 7.10 
     ISO_CLASS_II = [1.12, 2.80, 7.10] 
     
     # --- COMMISSIONING (API 686) ---
-    MAX_SOFT_FOOT = 0.05 # mm
-    ALIGNMENT_TOLERANCE = 0.05 # mm (3000 RPM)
+    MAX_SOFT_FOOT = 0.05
+    ALIGNMENT_TOLERANCE = 0.05
 
 # ==========================================
-# 2. DATA MODELS (SCHEMA)
+# 2. DATA MODELS
 # ==========================================
 @dataclass
 class ProtectionSettings:
@@ -86,7 +82,7 @@ class VibrationReading:
     axis: str
     value: float
 
-# --- DATABASE ASET (HARDCODED CONFIG) ---
+# --- DATABASE ASET ---
 ASSETS_DB = {
     "P-02": Asset(
         "0459599", "Pompa Pertalite", "FT Moutong",
@@ -106,7 +102,7 @@ ASSETS_DB = {
 }
 
 # ==========================================
-# 3. DATABASE MANAGER (CSV STORAGE)
+# 3. DATABASE MANAGER
 # ==========================================
 DB_FILE = "reliability_history.csv"
 
@@ -114,7 +110,7 @@ def init_db():
     if not os.path.exists(DB_FILE):
         df = pd.DataFrame(columns=[
             "Timestamp", "Asset_Tag", "Type", "Max_Value", 
-            "Status_Zone", "Diagnosa", "Input_Details"
+            "Status_Zone", "Diagnosa", "Details"
         ])
         df.to_csv(DB_FILE, index=False)
 
@@ -127,7 +123,7 @@ def save_record(asset_tag, type_chk, max_val, status, diagnosa, details):
         "Max_Value": max_val,
         "Status_Zone": status,
         "Diagnosa": " | ".join(diagnosa),
-        "Input_Details": str(details)
+        "Details": str(details)
     }
     df = pd.DataFrame([new_data])
     df.to_csv(DB_FILE, mode='a', header=False, index=False)
@@ -144,10 +140,9 @@ def load_history(tag_filter=None):
         return pd.DataFrame()
 
 # ==========================================
-# 4. LOGIC ENGINES (THE BRAINS)
+# 4. LOGIC ENGINES
 # ==========================================
 class ElectricalEngine:
-    """Simulasi Logic Relay Digital (ANSI C37.2)"""
     def __init__(self, settings: ProtectionSettings):
         self.s = settings
         self.flags = []
@@ -158,7 +153,6 @@ class ElectricalEngine:
         i1, i2, i3 = i_in
         is_starting = (status_m == "Starting")
         
-        # 1. VOLTAGE (ANSI 47, 27, 59)
         avg_v = np.mean([v1, v2, v3])
         if avg_v > 0:
             max_v_dev = max(abs(v - avg_v) for v in [v1, v2, v3])
@@ -172,7 +166,6 @@ class ElectricalEngine:
         elif avg_v > (self.s.rated_volt * self.s.pickup_59):
             self.flags.append(f"TRIP {ANSI.OV_59}: Overvoltage {avg_v:.1f}V")
 
-        # 2. CURRENT (ANSI 50, 51, 37, 46)
         max_i = max(i1, i2, i3)
         avg_i = np.mean([i1, i2, i3])
         
@@ -192,47 +185,29 @@ class ElectricalEngine:
                 self.flags.append(f"TRIP {ANSI.UB_46}: Unbalance {i_unbal:.1f}%")
         else: i_unbal = 0.0
 
-        # 3. OTHER (ANSI 50N, 49, 66)
         if i_g > self.s.pickup_50n:
             self.flags.append(f"TRIP {ANSI.GF_50N}: Ground Fault {i_g:.2f}A")
-        
         if starts > self.s.max_starts_hr:
             self.flags.append(f"BLOCK {ANSI.ST_66}: Max Starts Exceeded")
-        
         if temp > 130:
             self.flags.append(f"TRIP {ANSI.TH_49}: Overheat {temp}°C")
 
         return self.flags, i_unbal, v_unbal
 
 class MechanicalEngine:
-    """Diagnosa ISO 10816-3 & TKI C-017 (Logic: Averaging for Limit, Max for Diagnosis)"""
-    
     @staticmethod
     def calculate_averages(readings: List[VibrationReading]) -> List[dict]:
-        """Menghitung Rata-rata DE & NDE sesuai format TKI."""
-        groups = {
-            "Motor H": [], "Motor V": [], "Motor A": [],
-            "Pump H": [], "Pump V": [], "Pump A": []
-        }
-        
+        groups = {"Motor H": [], "Motor V": [], "Motor A": [], "Pump H": [], "Pump V": [], "Pump A": []}
         for r in readings:
             key = ""
             if "Motor" in r.location: key += "Motor "
             elif "Pump" in r.location: key += "Pump "
-            
             if "Horizontal" in r.axis: key += "H"
             elif "Vertical" in r.axis: key += "V"
             elif "Axial" in r.axis: key += "A"
-            
-            if key in groups:
-                groups[key].append(r.value)
+            if key in groups: groups[key].append(r.value)
         
-        averages = []
-        for key, vals in groups.items():
-            if vals:
-                avg_val = sum(vals) / len(vals)
-                averages.append({"label": key, "value": avg_val})
-        return averages
+        return [{"label": k, "value": sum(v)/len(v)} for k, v in groups.items() if v]
 
     @staticmethod
     def get_iso_status(val: float) -> Tuple[ISOZone, str]:
@@ -243,34 +218,43 @@ class MechanicalEngine:
         else: return ISOZone.D, "#e74c3c"
 
     @staticmethod
-    def analyze_root_cause(readings: List[VibrationReading], noise_chk: bool, temp_val: float, limit_temp: float) -> List[str]:
+    def analyze_root_cause(readings: List[VibrationReading], noise_chk: bool, temps: Dict[str, float], limit_temp: float) -> List[str]:
         causes = []
         warning_limit = Limits.VIB_WARN
         problem_points = [r for r in readings if r.value > warning_limit]
         
-        if not problem_points and not noise_chk and temp_val <= limit_temp:
+        # 1. TEMPERATUR CHECK (Specific Location)
+        # Cari suhu tertinggi
+        max_t_loc = max(temps, key=temps.get)
+        max_t_val = temps[max_t_loc]
+        
+        if max_t_val > limit_temp:
+            causes.append(f"🔥 OVERHEAT: {max_t_loc} mencapai {max_t_val}°C > {limit_temp}°C")
+
+        # 2. VIBRATION CHECK
+        if not problem_points and not noise_chk and max_t_val <= limit_temp:
             return ["Normal Operation"]
 
-        # A. Misalignment (Axial Tinggi di DE)
+        # A. Misalignment
         if any(r.axis == "Axial" and "DE" in r.location and r.value > warning_limit for r in problem_points):
             causes.append("🔴 MISALIGNMENT (Ref: TKI C-017): Dominan Axial pada sisi DE.")
-
-        # B. Unbalance (Horizontal Tinggi)
+        
+        # B. Unbalance
         high_horiz = [r for r in problem_points if r.axis == "Horizontal"]
         high_axial = [r for r in problem_points if r.axis == "Axial"]
         if high_horiz:
             if not high_axial or (max(h.value for h in high_horiz) > max(a.value for a in high_axial)):
                 causes.append("🟠 UNBALANCE (Ref: TKI C-017): Dominan Radial/Horizontal.")
 
-        # C. Looseness (Vertikal Tinggi)
+        # C. Looseness
         if any(r.axis == "Vertical" and r.value > warning_limit for r in problem_points):
-             causes.append("🔧 LOOSENESS (Ref: TKI C-017): Dominan Vertikal (Cek Pondasi/Soft Foot).")
+             causes.append("🔧 LOOSENESS (Ref: TKI C-017): Dominan Vertikal.")
 
-        # D. Bearing / Flow (Pump NDE)
+        # D. Bearing/Flow
         if any("Pump NDE" in r.location and r.value > warning_limit for r in problem_points):
             causes.append("🔩 BEARING/HYDRAULIC: Vibrasi tinggi di ujung pompa (NDE).")
 
-        # 2. LOGIKA NOISE (Cerdas)
+        # 3. NOISE CHECK
         if noise_chk:
             max_val = max(r.value for r in readings)
             if max_val > warning_limit:
@@ -278,26 +262,17 @@ class MechanicalEngine:
             else:
                  causes.append("🔊 NOISE (HIDROLIK): Vibrasi rendah tapi berisik (Kavitasi / Masuk Angin).")
 
-        if temp_val > limit_temp:
-            causes.append(f"🔥 OVERHEAT: Bearing {temp_val}°C > {limit_temp}°C")
-
         return list(set(causes))
 
 class CommissioningEngine:
-    """API 686 Installation Check"""
     @staticmethod
     def validate(soft_foot, v_off, h_off, grout_ok, pipe_ok):
         issues = []
-        if soft_foot > Limits.MAX_SOFT_FOOT:
-            issues.append(f"❌ Soft Foot {soft_foot}mm > {Limits.MAX_SOFT_FOOT}mm (API 686)")
-        
+        if soft_foot > Limits.MAX_SOFT_FOOT: issues.append(f"❌ Soft Foot {soft_foot}mm > {Limits.MAX_SOFT_FOOT}mm")
         max_align = max(abs(v_off), abs(h_off))
-        if max_align > Limits.ALIGNMENT_TOLERANCE:
-             issues.append(f"❌ Alignment {max_align}mm > {Limits.ALIGNMENT_TOLERANCE}mm (API 686)")
-        
-        if not grout_ok: issues.append("❌ Grouting belum Cured/Sound.")
-        if not pipe_ok: issues.append("❌ Pipe Strain terdeteksi.")
-
+        if max_align > Limits.ALIGNMENT_TOLERANCE: issues.append(f"❌ Alignment {max_align}mm > {Limits.ALIGNMENT_TOLERANCE}mm")
+        if not grout_ok: issues.append("❌ Grouting Check Failed")
+        if not pipe_ok: issues.append("❌ Pipe Strain Detected")
         status = "FAILED" if issues else "PASSED"
         return status, issues
 
@@ -307,12 +282,10 @@ class CommissioningEngine:
 def main():
     st.set_page_config(page_title="Reliability Pro Dashboard", layout="wide", page_icon="🏭")
     
-    # Init Session State
     if 'mech_result' not in st.session_state: st.session_state.mech_result = None
     if 'elec_result' not in st.session_state: st.session_state.elec_result = None
     if 'comm_result' not in st.session_state: st.session_state.comm_result = None
 
-    # --- SIDEBAR ---
     with st.sidebar:
         st.title("🏭 Reliability Pro")
         st.caption("Industrial Grade Asset Diagnostics")
@@ -327,44 +300,54 @@ def main():
         """)
         
         st.divider()
-        st.markdown("### 📂 Database History")
         if st.checkbox("Show History"):
             hist_df = load_history(selected_tag)
             st.dataframe(hist_df, use_container_width=True)
-            
             csv = hist_df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download CSV", csv, "history.csv", "text/csv")
 
     st.title(f"Dashboard Diagnosa: {asset.tag}")
-    
-    # --- TABS ---
-    tab1, tab2, tab3 = st.tabs(["🌊 Mechanical (ISO 10816)", "⚡ Electrical (ANSI)", "🚀 Commissioning (API 686)"])
+    tab1, tab2, tab3 = st.tabs(["🌊 Mechanical", "⚡ Electrical", "🚀 Commissioning"])
 
     # === TAB 1: MECHANICAL ===
     with tab1:
-        st.subheader("Vibration Analysis (TKI C-017 / ISO 10816-3)")
+        st.subheader("Vibration & Temperature (ISO 10816-3 / TKI C-017)")
         
         with st.form("mech_form"):
-            c1, c2 = st.columns(2)
+            col_m, col_p = st.columns(2)
             def v_in(lbl): return st.number_input(lbl, 0.0, 50.0, 0.5, 0.01)
+            def t_in(lbl): return st.number_input(lbl, 0.0, 150.0, 45.0, 0.1)
             
-            with c1:
-                st.markdown("**Driver (Motor)**")
-                m_nde_h, m_nde_v, m_nde_a = v_in("NDE H"), v_in("NDE V"), v_in("NDE A")
-                m_de_h, m_de_v, m_de_a = v_in("DE H"), v_in("DE V"), v_in("DE A")
-            with c2:
-                st.markdown("**Driven (Pump)**")
-                p_de_h, p_de_v, p_de_a = v_in("Pump DE H"), v_in("Pump DE V"), v_in("Pump DE A")
-                p_nde_h, p_nde_v, p_nde_a = v_in("Pump NDE H"), v_in("Pump NDE V"), v_in("Pump NDE A")
+            with col_m:
+                st.markdown("#### ⚡ Driver (Motor)")
+                c1, c2, c3 = st.columns(3)
+                m_nde_h, m_nde_v, m_nde_a = c1.number_input("M-NDE H",0.0,50.0,0.5), c2.number_input("M-NDE V",0.0,50.0,0.5), c3.number_input("M-NDE A",0.0,50.0,0.5)
+                c4, c5, c6 = st.columns(3)
+                m_de_h, m_de_v, m_de_a = c4.number_input("M-DE H",0.0,50.0,0.5), c5.number_input("M-DE V",0.0,50.0,0.5), c6.number_input("M-DE A",0.0,50.0,0.5)
+                
+                st.markdown("---")
+                st.markdown("**🌡️ Motor Temp (°C)**")
+                tm1, tm2 = st.columns(2)
+                t_m_nde = tm1.number_input("Motor NDE Temp", 0.0, 150.0, 50.0)
+                t_m_de = tm2.number_input("Motor DE Temp", 0.0, 150.0, 62.0)
+
+            with col_p:
+                st.markdown("#### 💧 Driven (Pompa)")
+                c7, c8, c9 = st.columns(3)
+                p_de_h, p_de_v, p_de_a = c7.number_input("P-DE H",0.0,50.0,0.5), c8.number_input("P-DE V",0.0,50.0,0.5), c9.number_input("P-DE A",0.0,50.0,0.5)
+                c10, c11, c12 = st.columns(3)
+                p_nde_h, p_nde_v, p_nde_a = c10.number_input("P-NDE H",0.0,50.0,0.5), c11.number_input("P-NDE V",0.0,50.0,0.5), c12.number_input("P-NDE A",0.0,50.0,0.5)
+                
+                st.markdown("---")
+                st.markdown("**🌡️ Pump Temp (°C)**")
+                tp1, tp2 = st.columns(2)
+                t_p_de = tp1.number_input("Pump DE Temp", 0.0, 150.0, 75.0)
+                t_p_nde = tp2.number_input("Pump NDE Temp", 0.0, 150.0, 55.0)
             
             st.markdown("---")
-            c3, c4 = st.columns(2)
-            temp_bear = c3.number_input("Bearing Temp (°C)", 0.0, 150.0, 60.0)
-            noise_chk = c4.checkbox("Abnormal Noise?")
-            
+            noise_chk = st.checkbox("🔊 Abnormal Noise Detected?")
             submit_mech = st.form_submit_button("🔍 ANALYZE MECHANICAL")
         
-        # INDENTATION FIX IS HERE (Aligned with with st.form)
         if submit_mech:
             readings = [
                 VibrationReading("Motor NDE", "Horizontal", m_nde_h), VibrationReading("Motor NDE", "Vertical", m_nde_v), VibrationReading("Motor NDE", "Axial", m_nde_a),
@@ -372,24 +355,23 @@ def main():
                 VibrationReading("Pump DE", "Horizontal", p_de_h), VibrationReading("Pump DE", "Vertical", p_de_v), VibrationReading("Pump DE", "Axial", p_de_a),
                 VibrationReading("Pump NDE", "Horizontal", p_nde_h), VibrationReading("Pump NDE", "Vertical", p_nde_v), VibrationReading("Pump NDE", "Axial", p_nde_a),
             ]
+            temps = {"Motor NDE": t_m_nde, "Motor DE": t_m_de, "Pump DE": t_p_de, "Pump NDE": t_p_nde}
             
-            # 1. Hitung Average sesuai TKI
+            # Logic TKI: Average for Limit
             avgs = MechanicalEngine.calculate_averages(readings)
             max_avg_obj = max(avgs, key=lambda x: x['value'])
-            
-            # 2. Status berdasarkan Avg
             iso_zone, color = MechanicalEngine.get_iso_status(max_avg_obj['value'])
             
-            # 3. Diagnosa berdasarkan Individual Reading (Max)
-            causes = MechanicalEngine.analyze_root_cause(readings, noise_chk, temp_bear, asset.mech.bearing_temp_limit)
+            # Logic Diagnosa: Individual + Temp Locations
+            causes = MechanicalEngine.analyze_root_cause(readings, noise_chk, temps, asset.mech.bearing_temp_limit)
             
             st.session_state.mech_result = {
                 "max": max_avg_obj['value'], "zone": iso_zone.value, "color": color, 
                 "causes": causes, "loc": f"Avg {max_avg_obj['label']}",
-                "raw": {r.location+r.axis: r.value for r in readings}
+                "raw_vib": {r.location+r.axis: r.value for r in readings},
+                "raw_temp": temps
             }
 
-        # Tampilkan Hasil
         if st.session_state.mech_result:
             res = st.session_state.mech_result
             d1, d2 = st.columns([1,2])
@@ -409,16 +391,16 @@ def main():
                 st.markdown("**Diagnosa AI:**")
                 for c in res['causes']: st.write(f"- {c}")
                 
-                if st.button("💾 SIMPAN HASIL MEKANIKAL KE DATABASE"):
-                    save_record(asset.tag, "Mechanical", f"{res['max']:.2f} mm/s (Avg)", res['zone'], res['causes'], res['raw'])
+                if st.button("💾 SIMPAN HASIL MEKANIKAL"):
+                    details = f"Vibs: {res['raw_vib']} | Temps: {res['raw_temp']}"
+                    save_record(asset.tag, "Mechanical", f"{res['max']:.2f} mm/s", res['zone'], res['causes'], details)
                     st.success("✅ Data tersimpan di History.")
 
     # === TAB 2: ELECTRICAL ===
     with tab2:
-        st.subheader("Protection Relay Simulation (ANSI C37.2)")
+        st.subheader("Protection Relay Simulation")
         with st.form("elec_form"):
             e1, e2, e3 = st.columns(3)
-            # Explicit Float Casting
             v_def = float(asset.elec.rated_volt)
             c_def = float(asset.elec.flc_amps * 0.8)
             
@@ -449,7 +431,6 @@ def main():
         if st.session_state.elec_result:
             res = st.session_state.elec_result
             logs = res['logs']
-            
             codes = [ANSI.UV_27, ANSI.OV_59, ANSI.VU_47, ANSI.IOC_50, ANSI.TOC_51, ANSI.UC_37, ANSI.UB_46, ANSI.GF_50N]
             cols = st.columns(4)
             for i, c in enumerate(codes):
@@ -483,7 +464,7 @@ def main():
             submit_comm = st.form_submit_button("✅ VALIDATE")
 
         if submit_comm:
-            stat, issues = CommissioningEngine.validate(soft_foot, v_off, h_off, chk_g, chk_p)
+            stat, issues = CommissioningEngine.validate(soft_foot, v_off, h_off, chk_g, ch_p)
             st.session_state.comm_result = {"status": stat, "issues": issues}
 
         if st.session_state.comm_result:
@@ -493,7 +474,6 @@ def main():
                 for i in res['issues']: st.write(i)
             else:
                 st.success("🎉 PASSED (Ready for Start-up)")
-
             if st.button("💾 SIMPAN KOMISIONING"):
                 save_record(asset.tag, "Commissioning", res['status'], res['status'], res['issues'], f"SF:{soft_foot}")
                 st.success("✅ Data tersimpan.")
