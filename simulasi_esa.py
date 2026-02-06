@@ -26,11 +26,11 @@ class ANSI:
     ST_66 = "66 - Start Limitation"
 
 class ISOZone(Enum):
-    """ISO 10816-3 Vibration Severity Zones"""
-    A = "GOOD (Zone A)"
-    B = "SATISFACTORY (Zone B)"
-    C = "UNSATISFACTORY (Zone C)"
-    D = "UNACCEPTABLE (Zone D)"
+    """ISO 10816-3 Vibration Severity Zones (Descriptions Updated)"""
+    A = "Zone A: New machine condition"
+    B = "Zone B: Unlimited long-term operation allowable"
+    C = "Zone C: Short-term operation allowable"
+    D = "Zone D: Vibration causes damage"
 
 class Limits:
     # --- ELECTRICAL ---
@@ -224,10 +224,8 @@ class MechanicalEngine:
         problem_points = [r for r in readings if r.value > warning_limit]
         
         # 1. TEMPERATUR CHECK (Specific Location)
-        # Cari suhu tertinggi
         max_t_loc = max(temps, key=temps.get)
         max_t_val = temps[max_t_loc]
-        
         if max_t_val > limit_temp:
             causes.append(f"🔥 OVERHEAT: {max_t_loc} mencapai {max_t_val}°C > {limit_temp}°C")
 
@@ -235,9 +233,12 @@ class MechanicalEngine:
         if not problem_points and not noise_chk and max_t_val <= limit_temp:
             return ["Normal Operation"]
 
-        # A. Misalignment
-        if any(r.axis == "Axial" and "DE" in r.location and r.value > warning_limit for r in problem_points):
-            causes.append("🔴 MISALIGNMENT (Ref: TKI C-017): Dominan Axial pada sisi DE.")
+        # A. Misalignment (FIXED: Specify which DE)
+        misaligned_locs = [r.location for r in problem_points if r.axis == "Axial" and "DE" in r.location]
+        if misaligned_locs:
+            # Join locations: "Motor DE" or "Motor DE, Pump DE"
+            loc_str = " & ".join(misaligned_locs)
+            causes.append(f"🔴 MISALIGNMENT (Ref: TKI C-017): Dominan Axial pada **{loc_str}**.")
         
         # B. Unbalance
         high_horiz = [r for r in problem_points if r.axis == "Horizontal"]
@@ -315,8 +316,6 @@ def main():
         
         with st.form("mech_form"):
             col_m, col_p = st.columns(2)
-            def v_in(lbl): return st.number_input(lbl, 0.0, 50.0, 0.5, 0.01)
-            def t_in(lbl): return st.number_input(lbl, 0.0, 150.0, 45.0, 0.1)
             
             with col_m:
                 st.markdown("#### ⚡ Driver (Motor)")
@@ -387,7 +386,9 @@ def main():
                 st.caption(f"📍 Determinant: {res['loc']}")
             
             with d2:
-                st.markdown(f"### Status: :{ 'green' if 'A' in res['zone'] or 'B' in res['zone'] else 'red' }[{res['zone']}]")
+                # Menampilkan Status Lengkap Sesuai Permintaan
+                st.info(f"### {res['zone']}")
+                
                 st.markdown("**Diagnosa AI:**")
                 for c in res['causes']: st.write(f"- {c}")
                 
@@ -464,7 +465,7 @@ def main():
             submit_comm = st.form_submit_button("✅ VALIDATE")
 
         if submit_comm:
-            stat, issues = CommissioningEngine.validate(soft_foot, v_off, h_off, chk_g, ch_p)
+            stat, issues = CommissioningEngine.validate(soft_foot, v_off, h_off, chk_g, chk_p)
             st.session_state.comm_result = {"status": stat, "issues": issues}
 
         if st.session_state.comm_result:
