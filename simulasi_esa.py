@@ -373,7 +373,8 @@ def main():
             
             submit_mech = st.form_submit_button("🔍 ANALYZE MECHANICAL")
         
-        if submit_mech:
+ if submit_mech:
+            # 1. Kumpulkan Data Mentah
             readings = [
                 VibrationReading("Motor NDE", "Horizontal", m_nde_h), VibrationReading("Motor NDE", "Vertical", m_nde_v), VibrationReading("Motor NDE", "Axial", m_nde_a),
                 VibrationReading("Motor DE", "Horizontal", m_de_h), VibrationReading("Motor DE", "Vertical", m_de_v), VibrationReading("Motor DE", "Axial", m_de_a),
@@ -381,14 +382,23 @@ def main():
                 VibrationReading("Pump NDE", "Horizontal", p_nde_h), VibrationReading("Pump NDE", "Vertical", p_nde_v), VibrationReading("Pump NDE", "Axial", p_nde_a),
             ]
             
-            max_r = max(readings, key=lambda x: x.value)
-            iso_zone, color = MechanicalEngine.get_iso_status(max_r.value)
+            # 2. Hitung Rata-Rata (Sesuai TKI)
+            avgs = MechanicalEngine.calculate_averages(readings)
+            
+            # 3. Cari Rata-Rata Tertinggi untuk Penentuan ZONA/STATUS
+            max_avg_obj = max(avgs, key=lambda x: x['value'])
+            iso_zone, color = MechanicalEngine.get_iso_status(max_avg_obj['value'])
+            
+            # 4. Diagnosa (Tetap pakai pembacaan individual agar akurat)
             causes = MechanicalEngine.analyze_root_cause(readings, noise_chk, temp_bear, asset.mech.bearing_temp_limit)
             
             # Simpan ke Session State
             st.session_state.mech_result = {
-                "max": max_r.value, "zone": iso_zone.value, "color": color, 
-                "causes": causes, "loc": f"{max_r.location} - {max_r.axis}",
+                "max": max_avg_obj['value'], # Ini sekarang Nilai RATA-RATA TERTINGGI
+                "zone": iso_zone.value, 
+                "color": color, 
+                "causes": causes, 
+                "loc": f"Avg {max_avg_obj['label']}", # Labelnya jadi "Avg Motor H", dsb
                 "raw": {r.location+r.axis: r.value for r in readings}
             }
 
@@ -397,23 +407,25 @@ def main():
             res = st.session_state.mech_result
             d1, d2 = st.columns([1,2])
             with d1:
+                # Gauge Chart
                 fig = go.Figure(go.Indicator(
                     mode="gauge+number", value=res['max'],
-                    title={'text': "Max Vib (mm/s)"},
+                    title={'text': "Max Average Vibration"}, # Judul diganti biar jelas
                     gauge={'axis': {'range': [0, 10]}, 'bar': {'color': "black"},
                            'steps': [{'range': [0, 2.8], 'color': "#2ecc71"}, {'range': [2.8, 7.1], 'color': "#f1c40f"}, {'range': [7.1, 10], 'color': "#e74c3c"}]}
                 ))
                 fig.update_layout(height=250, margin=dict(t=30,b=20,l=20,r=20))
                 st.plotly_chart(fig, use_container_width=True)
-                st.caption(f"📍 Peak at: {res['loc']}")
+                st.caption(f"📍 Determinant: {res['loc']} (Sesuai TKI)")
             
             with d2:
+                # ... (Sisa kode tampilan sama) ...
                 st.markdown(f"### Status: :{ 'green' if 'A' in res['zone'] or 'B' in res['zone'] else 'red' }[{res['zone']}]")
                 st.markdown("**Diagnosa AI:**")
                 for c in res['causes']: st.write(f"- {c}")
                 
                 if st.button("💾 SIMPAN HASIL MEKANIKAL KE DATABASE"):
-                    save_record(asset.tag, "Mechanical", f"{res['max']} mm/s", res['zone'], res['causes'], res['raw'])
+                    save_record(asset.tag, "Mechanical", f"{res['max']:.2f} mm/s (Avg)", res['zone'], res['causes'], res['raw'])
                     st.success("✅ Data tersimpan di History.")
 
     # === TAB 2: ELECTRICAL ===
