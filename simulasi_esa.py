@@ -202,7 +202,41 @@ class ElectricalEngine:
         return self.flags, i_unbal, v_unbal
 
 class MechanicalEngine:
-    """Diagnosa ISO 10816-3 & TKI C-017"""
+    """Diagnosa ISO 10816-3 & TKI C-017 (Logic: Averaging for Limit, Max for Diagnosis)"""
+    
+    @staticmethod
+    def calculate_averages(readings: List[VibrationReading]) -> List[dict]:
+        """
+        Menghitung Rata-rata DE & NDE sesuai format TKI.
+        Output: List of {loc_group: 'Motor Horiz', val: 4.5}
+        """
+        # Kelompokkan data
+        groups = {
+            "Motor H": [], "Motor V": [], "Motor A": [],
+            "Pump H": [], "Pump V": [], "Pump A": []
+        }
+        
+        for r in readings:
+            key = ""
+            if "Motor" in r.location: key += "Motor "
+            elif "Pump" in r.location: key += "Pump "
+            
+            if "Horizontal" in r.axis: key += "H"
+            elif "Vertical" in r.axis: key += "V"
+            elif "Axial" in r.axis: key += "A"
+            
+            if key in groups:
+                groups[key].append(r.value)
+        
+        # Hitung Average
+        averages = []
+        for key, vals in groups.items():
+            if vals:
+                avg_val = sum(vals) / len(vals)
+                averages.append({"label": key, "value": avg_val})
+        
+        return averages
+
     @staticmethod
     def get_iso_status(val: float) -> Tuple[ISOZone, str]:
         limits = Limits.ISO_CLASS_II
@@ -215,6 +249,9 @@ class MechanicalEngine:
     def analyze_root_cause(readings: List[VibrationReading], noise_chk: bool, temp_val: float, limit_temp: float) -> List[str]:
         causes = []
         warning_limit = Limits.VIB_WARN
+        
+        # NOTE: Untuk Diagnosa Akar Masalah, kita tetap pakai SINGLE POINT (Max)
+        # Karena kerusakan fisik terjadi di satu titik, bukan rata-rata.
         problem_points = [r for r in readings if r.value > warning_limit]
         
         # 1. LOGIKA UTAMA (TKI C-017 Table 1)
