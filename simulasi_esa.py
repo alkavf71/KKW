@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Tuple
 from enum import Enum
 from datetime import datetime
 import os
@@ -123,9 +123,9 @@ def save_record(asset_tag, type_chk, max_val, status, diagnosa, details):
     new_data = {
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Asset_Tag": asset_tag,
-        "Type": type_chk, # 'Mechanical', 'Electrical', 'Commissioning'
-        "Max_Value": max_val, # e.g., "4.5 mm/s" or "Trip ANSI 27"
-        "Status_Zone": status, # 'Zone C' or 'CRITICAL'
+        "Type": type_chk,
+        "Max_Value": max_val,
+        "Status_Zone": status,
         "Diagnosa": " | ".join(diagnosa),
         "Input_Details": str(details)
     }
@@ -135,10 +135,13 @@ def save_record(asset_tag, type_chk, max_val, status, diagnosa, details):
 
 def load_history(tag_filter=None):
     init_db()
-    df = pd.read_csv(DB_FILE)
-    if tag_filter and tag_filter != "ALL":
-        df = df[df["Asset_Tag"] == tag_filter]
-    return df.sort_values(by="Timestamp", ascending=False)
+    try:
+        df = pd.read_csv(DB_FILE)
+        if tag_filter and tag_filter != "ALL":
+            df = df[df["Asset_Tag"] == tag_filter]
+        return df.sort_values(by="Timestamp", ascending=False)
+    except Exception:
+        return pd.DataFrame()
 
 # ==========================================
 # 4. LOGIC ENGINES (THE BRAINS)
@@ -206,11 +209,7 @@ class MechanicalEngine:
     
     @staticmethod
     def calculate_averages(readings: List[VibrationReading]) -> List[dict]:
-        """
-        Menghitung Rata-rata DE & NDE sesuai format TKI.
-        Output: List of {loc_group: 'Motor Horiz', val: 4.5}
-        """
-        # Kelompokkan data
+        """Menghitung Rata-rata DE & NDE sesuai format TKI."""
         groups = {
             "Motor H": [], "Motor V": [], "Motor A": [],
             "Pump H": [], "Pump V": [], "Pump A": []
@@ -228,13 +227,11 @@ class MechanicalEngine:
             if key in groups:
                 groups[key].append(r.value)
         
-        # Hitung Average
         averages = []
         for key, vals in groups.items():
             if vals:
                 avg_val = sum(vals) / len(vals)
                 averages.append({"label": key, "value": avg_val})
-        
         return averages
 
     @staticmethod
@@ -249,12 +246,8 @@ class MechanicalEngine:
     def analyze_root_cause(readings: List[VibrationReading], noise_chk: bool, temp_val: float, limit_temp: float) -> List[str]:
         causes = []
         warning_limit = Limits.VIB_WARN
-        
-        # NOTE: Untuk Diagnosa Akar Masalah, kita tetap pakai SINGLE POINT (Max)
-        # Karena kerusakan fisik terjadi di satu titik, bukan rata-rata.
         problem_points = [r for r in readings if r.value > warning_limit]
         
-        # 1. LOGIKA UTAMA (TKI C-017 Table 1)
         if not problem_points and not noise_chk and temp_val <= limit_temp:
             return ["Normal Operation"]
 
@@ -266,7 +259,6 @@ class MechanicalEngine:
         high_horiz = [r for r in problem_points if r.axis == "Horizontal"]
         high_axial = [r for r in problem_points if r.axis == "Axial"]
         if high_horiz:
-            # Jika Horizontal > Axial
             if not high_axial or (max(h.value for h in high_horiz) > max(a.value for a in high_axial)):
                 causes.append("🟠 UNBALANCE (Ref: TKI C-017): Dominan Radial/Horizontal.")
 
@@ -286,7 +278,6 @@ class MechanicalEngine:
             else:
                  causes.append("🔊 NOISE (HIDROLIK): Vibrasi rendah tapi berisik (Kavitasi / Masuk Angin).")
 
-        # 3. OVERHEAT
         if temp_val > limit_temp:
             causes.append(f"🔥 OVERHEAT: Bearing {temp_val}°C > {limit_temp}°C")
 
@@ -316,7 +307,7 @@ class CommissioningEngine:
 def main():
     st.set_page_config(page_title="Reliability Pro Dashboard", layout="wide", page_icon="🏭")
     
-    # Init Session State untuk menyimpan hasil analisa sebelum di-save
+    # Init Session State
     if 'mech_result' not in st.session_state: st.session_state.mech_result = None
     if 'elec_result' not in st.session_state: st.session_state.elec_result = None
     if 'comm_result' not in st.session_state: st.session_state.comm_result = None
@@ -373,8 +364,8 @@ def main():
             
             submit_mech = st.form_submit_button("🔍 ANALYZE MECHANICAL")
         
- if submit_mech:
-            # 1. Kumpulkan Data Mentah
+        # INDENTATION FIX IS HERE (Aligned with with st.form)
+        if submit_mech:
             readings = [
                 VibrationReading("Motor NDE", "Horizontal", m_nde_h), VibrationReading("Motor NDE", "Vertical", m_nde_v), VibrationReading("Motor NDE", "Axial", m_nde_a),
                 VibrationReading("Motor DE", "Horizontal", m_de_h), VibrationReading("Motor DE", "Vertical", m_de_v), VibrationReading("Motor DE", "Axial", m_de_a),
@@ -382,44 +373,38 @@ def main():
                 VibrationReading("Pump NDE", "Horizontal", p_nde_h), VibrationReading("Pump NDE", "Vertical", p_nde_v), VibrationReading("Pump NDE", "Axial", p_nde_a),
             ]
             
-            # 2. Hitung Rata-Rata (Sesuai TKI)
+            # 1. Hitung Average sesuai TKI
             avgs = MechanicalEngine.calculate_averages(readings)
-            
-            # 3. Cari Rata-Rata Tertinggi untuk Penentuan ZONA/STATUS
             max_avg_obj = max(avgs, key=lambda x: x['value'])
+            
+            # 2. Status berdasarkan Avg
             iso_zone, color = MechanicalEngine.get_iso_status(max_avg_obj['value'])
             
-            # 4. Diagnosa (Tetap pakai pembacaan individual agar akurat)
+            # 3. Diagnosa berdasarkan Individual Reading (Max)
             causes = MechanicalEngine.analyze_root_cause(readings, noise_chk, temp_bear, asset.mech.bearing_temp_limit)
             
-            # Simpan ke Session State
             st.session_state.mech_result = {
-                "max": max_avg_obj['value'], # Ini sekarang Nilai RATA-RATA TERTINGGI
-                "zone": iso_zone.value, 
-                "color": color, 
-                "causes": causes, 
-                "loc": f"Avg {max_avg_obj['label']}", # Labelnya jadi "Avg Motor H", dsb
+                "max": max_avg_obj['value'], "zone": iso_zone.value, "color": color, 
+                "causes": causes, "loc": f"Avg {max_avg_obj['label']}",
                 "raw": {r.location+r.axis: r.value for r in readings}
             }
 
-        # Tampilkan Hasil (Persistent)
+        # Tampilkan Hasil
         if st.session_state.mech_result:
             res = st.session_state.mech_result
             d1, d2 = st.columns([1,2])
             with d1:
-                # Gauge Chart
                 fig = go.Figure(go.Indicator(
                     mode="gauge+number", value=res['max'],
-                    title={'text': "Max Average Vibration"}, # Judul diganti biar jelas
+                    title={'text': "Max Average Vibration"},
                     gauge={'axis': {'range': [0, 10]}, 'bar': {'color': "black"},
                            'steps': [{'range': [0, 2.8], 'color': "#2ecc71"}, {'range': [2.8, 7.1], 'color': "#f1c40f"}, {'range': [7.1, 10], 'color': "#e74c3c"}]}
                 ))
                 fig.update_layout(height=250, margin=dict(t=30,b=20,l=20,r=20))
                 st.plotly_chart(fig, use_container_width=True)
-                st.caption(f"📍 Determinant: {res['loc']} (Sesuai TKI)")
+                st.caption(f"📍 Determinant: {res['loc']}")
             
             with d2:
-                # ... (Sisa kode tampilan sama) ...
                 st.markdown(f"### Status: :{ 'green' if 'A' in res['zone'] or 'B' in res['zone'] else 'red' }[{res['zone']}]")
                 st.markdown("**Diagnosa AI:**")
                 for c in res['causes']: st.write(f"- {c}")
@@ -433,7 +418,7 @@ def main():
         st.subheader("Protection Relay Simulation (ANSI C37.2)")
         with st.form("elec_form"):
             e1, e2, e3 = st.columns(3)
-            # EXPLICIT FLOAT CASTING
+            # Explicit Float Casting
             v_def = float(asset.elec.rated_volt)
             c_def = float(asset.elec.flc_amps * 0.8)
             
@@ -465,7 +450,6 @@ def main():
             res = st.session_state.elec_result
             logs = res['logs']
             
-            # ANSI Grid
             codes = [ANSI.UV_27, ANSI.OV_59, ANSI.VU_47, ANSI.IOC_50, ANSI.TOC_51, ANSI.UC_37, ANSI.UB_46, ANSI.GF_50N]
             cols = st.columns(4)
             for i, c in enumerate(codes):
