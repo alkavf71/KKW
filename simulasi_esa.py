@@ -15,7 +15,7 @@ from modules.standards import ISOZone, Limits # Pastikan file standards.py ada b
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
-    page_title="Reliability Pro Dashboard",
+    page_title="Under Construction by Alkap Corp.",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="expanded"
