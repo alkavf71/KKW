@@ -81,7 +81,7 @@ with st.sidebar:
 # ==============================================================================
 # 2. MAIN CONTENT
 # ==============================================================================
-st.title(f"Dashboard Diagnosa: {asset.tag}")
+st.title(f"Under Construction by Alkap Corp.: {asset.tag}")
 st.markdown(f"**Status Operasi:** {activity_type} | **Acuan Standar:** ISO 10816, ISO 18436, API 610, NEMA MG-1")
 
 # TAB LAYOUT
