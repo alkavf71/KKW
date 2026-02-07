@@ -261,26 +261,66 @@ with tab2:
             for c in res['causes']: st.error(c)
 
 # ==============================================================================
-# TAB 3: KESIMPULAN
+# TAB 3: KESIMPULAN FINAL (UPDATED)
 # ==============================================================================
 with tab3:
     if st.button("GENERATE FINAL REPORT"):
+        # Pastikan sudah ada hasil analisa mekanikal
         if st.session_state.mech_result:
             res = st.session_state.mech_result
+            
+            # Ambil semua data pendukung
             phys = res.get('phys', [])
+            causes = res.get('causes', []) # Ini adalah diagnosa teknis (Misalignment, dll)
+            temps_val = max(res['temps'].values()) if res.get('temps') else 0.0
             
-            health = assess_overall_health(res['status'], "Normal", max(res['temps'].values()), phys)
+            # Panggil Logic 'Otak' Baru dengan parameter lengkap
+            health = assess_overall_health(res['status'], "Normal", temps_val, phys, causes)
             
+            # --- TAMPILAN LAPORAN UTAMA ---
             st.markdown(f"""
-            <div style="background-color:{'#d4edda' if health['status']=='GOOD' else '#f8d7da'}; padding:20px; border-radius:10px; border:2px solid {health['color']}; text-align:center;">
-                <h1 style="color:{health['color']}; margin:0;">{health['status']}</h1>
-                <h3>{health['desc']}</h3>
-                <hr>
-                <b>REKOMENDASI:</b><br>{health['action']}
+            <div style="background-color:{'#d4edda' if 'GOOD' in health['status'] else '#f8d7da'}; padding:20px; border-radius:10px; border:3px solid {health['color']}; text-align:center; box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);">
+                <h2 style="color:{health['color']}; margin:0; font-weight:900;">{health['status']}</h2>
+                <h4 style="margin-top:5px;">{health['desc']}</h4>
+                <hr style="border-top: 1px solid {health['color']};">
+                <h3 style="margin-bottom:5px;">KEPUTUSAN:</h3>
+                <p style="font-size:18px; font-weight:bold;">{health['action']}</p>
             </div>
             """, unsafe_allow_html=True)
             
-            if health['reasons']:
+            # --- TAMPILAN DETAIL (2 KOLOM) ---
+            c_rep1, c_rep2 = st.columns(2)
+            
+            with c_rep1:
                 st.write("")
-                st.error("**FAKTOR PENYEBAB:**")
-                for r in health['reasons']: st.write(f"❌ {r}")
+                st.error("### 🔍 AKAR MASALAH (Root Cause)")
+                if health['reasons']:
+                    for r in health['reasons']:
+                        st.write(f"❌ {r}")
+                else:
+                    st.success("Tidak ditemukan masalah signifikan.")
+
+            with c_rep2:
+                st.write("")
+                st.warning("### 🛠️ REKOMENDASI PERBAIKAN")
+                if health['recommendations']:
+                    for rec in health['recommendations']:
+                        st.write(f"🔧 {rec}")
+                else:
+                    st.write("• Lanjutkan maintenance rutin.")
+
+            # --- TAMPILAN STANDAR (FOOTER) ---
+            st.markdown("---")
+            st.caption("📚 **STANDAR REFERENSI YANG DIGUNAKAN DALAM ANALISA INI:**")
+            
+            # Tampilkan standar dalam bentuk tags
+            if health['standards']:
+                std_html = ""
+                for std in health['standards']:
+                    std_html += f"<span style='background-color:#e2e6ea; padding:5px 10px; border-radius:15px; margin-right:5px; font-size:12px; display:inline-block; border:1px solid #ccc;'>📘 {std}</span>"
+                st.markdown(std_html, unsafe_allow_html=True)
+            else:
+                st.caption("ISO 10816-3 (Default)")
+                
+        else:
+            st.warning("⚠️ Harap jalankan Analisa Mekanikal (Tab 1) dulu sebelum Generate Report.")
