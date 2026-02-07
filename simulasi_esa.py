@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- IMPORT MODULES ---
+# Pastikan folder 'modules' ada dan berisi file-file yang sudah kita buat
 from modules.asset_database import get_asset_list, get_asset_details
 from modules.standards import ISOZone
 from modules.vibration_diagnostics import analyze_vibration_matrix, VibPoint
@@ -44,7 +45,7 @@ tab1, tab2, tab3 = st.tabs(["⚙️ MEKANIKAL (REPORT)", "⚡ ELEKTRIKAL", "🏥
 # TAB 1: MEKANIKAL (LOGIC REPORT TABLE)
 # ==============================================================================
 with tab1:
-    col1, col2 = st.columns([1, 1.5]) # Kolom kanan lebih lebar untuk Tabel
+    col1, col2 = st.columns([1, 1.5]) 
     
     # --- FORM INPUT ---
     with col1:
@@ -58,13 +59,15 @@ with tab1:
                 m_de_h = st.number_input("M-DE Horiz", value=5.46)
                 m_de_v = st.number_input("M-DE Vert", value=2.48)
                 m_de_a = st.number_input("M-DE Axial", value=9.31)
-                t_m_de = st.number_input("Temp DE (°C)", value=40.0)
+                # PERBAIKAN: Label dibedakan (Motor)
+                t_m_de = st.number_input("Temp Motor DE (°C)", value=40.0) 
             with c1b:
                 st.caption("Titik NDE")
                 m_nde_h = st.number_input("M-NDE Horiz", value=4.41)
                 m_nde_v = st.number_input("M-NDE Vert", value=6.89)
                 m_nde_a = st.number_input("M-NDE Axial", value=8.11)
-                t_m_nde = st.number_input("Temp NDE (°C)", value=40.0)
+                # PERBAIKAN: Label dibedakan (Motor)
+                t_m_nde = st.number_input("Temp Motor NDE (°C)", value=40.0)
 
             st.markdown("#### DRIVEN (Pompa)")
             c2a, c2b = st.columns(2)
@@ -73,13 +76,15 @@ with tab1:
                 p_de_h = st.number_input("P-DE Horiz", value=1.62)
                 p_de_v = st.number_input("P-DE Vert", value=6.70)
                 p_de_a = st.number_input("P-DE Axial", value=2.05)
-                t_p_de = st.number_input("Temp DE (°C)", value=36.0)
+                # PERBAIKAN: Label dibedakan (Pompa)
+                t_p_de = st.number_input("Temp Pompa DE (°C)", value=36.0)
             with c2b:
                 st.caption("Titik NDE")
                 p_nde_h = st.number_input("P-NDE Horiz", value=1.23)
                 p_nde_v = st.number_input("P-NDE Vert", value=4.00)
                 p_nde_a = st.number_input("P-NDE Axial", value=5.22)
-                t_p_nde = st.number_input("Temp NDE (°C)", value=40.0)
+                # PERBAIKAN: Label dibedakan (Pompa)
+                t_p_nde = st.number_input("Temp Pompa NDE (°C)", value=40.0)
 
             st.divider()
             st.markdown("**Inspeksi Fisik & Noise:**")
@@ -91,38 +96,35 @@ with tab1:
             chk_guard = st.checkbox("MAJOR: Guard Hilang")
             chk_baut = st.checkbox("MINOR: Baut Kendor")
             
+            # Tombol Submit ada di dalam Form (Indentation benar)
             submit_mech = st.form_submit_button("🔍 GENERATE TABEL LAPORAN")
 
     # --- LOGIKA PEMBUATAN TABEL LAPORAN ---
     if submit_mech:
         # 1. Tentukan Limit
         limit = 3.0 if is_comm else asset.vib_limit_warning
-        limit_trip = 7.1 # Bisa disesuaikan
+        limit_trip = 7.1 
         
-        # 2. Fungsi Helper Penentuan Remark per Baris
+        # 2. Fungsi Helper Remark
         def get_remark(val, lim_warn, lim_trip):
-            if val < lim_warn: return ISOZone.B.value # Good/Unlimited
-            elif val < lim_trip: return ISOZone.C.value # Short term
-            else: return ISOZone.D.value # Vibration causes damage
+            if val < lim_warn: return ISOZone.B.value 
+            elif val < lim_trip: return ISOZone.C.value 
+            else: return ISOZone.D.value 
 
         # 3. Hitung Rata-rata PER SUMBU (DE + NDE) / 2
-        # --- DRIVER ---
         avr_m_h = (m_de_h + m_nde_h) / 2
         avr_m_v = (m_de_v + m_nde_v) / 2
         avr_m_a = (m_de_a + m_nde_a) / 2
         
-        # --- DRIVEN ---
         avr_p_h = (p_de_h + p_nde_h) / 2
         avr_p_v = (p_de_v + p_nde_v) / 2
         avr_p_a = (p_de_a + p_nde_a) / 2
 
-        # 4. Buat DataFrame (Tabel)
+        # 4. Buat DataFrame
         data = [
-            # DRIVER ROWS
             ["Driver", "H", m_de_h, m_nde_h, avr_m_h, limit, get_remark(avr_m_h, limit, limit_trip)],
             ["Driver", "V", m_de_v, m_nde_v, avr_m_v, limit, get_remark(avr_m_v, limit, limit_trip)],
             ["Driver", "A", m_de_a, m_nde_a, avr_m_a, limit, get_remark(avr_m_a, limit, limit_trip)],
-            # DRIVEN ROWS
             ["Driven", "H", p_de_h, p_nde_h, avr_p_h, limit, get_remark(avr_p_h, limit, limit_trip)],
             ["Driven", "V", p_de_v, p_nde_v, avr_p_v, limit, get_remark(avr_p_v, limit, limit_trip)],
             ["Driven", "A", p_de_a, p_nde_a, avr_p_a, limit, get_remark(avr_p_a, limit, limit_trip)],
@@ -130,7 +132,7 @@ with tab1:
         
         df_report = pd.DataFrame(data, columns=["Unit", "Axis", "DE", "NDE", "Avr", "Limit", "Remark"])
         
-        # 5. Diagnosa Teknis (Tetap jalan di background)
+        # 5. Diagnosa Teknis
         readings = [
             VibPoint("Motor DE", "Horizontal", m_de_h), VibPoint("Motor DE", "Vertical", m_de_v), VibPoint("Motor DE", "Axial", m_de_a),
             VibPoint("Motor NDE", "Horizontal", m_nde_h), VibPoint("Motor NDE", "Vertical", m_nde_v), VibPoint("Motor NDE", "Axial", m_nde_a),
@@ -142,7 +144,6 @@ with tab1:
         # 6. Simpan Hasil
         max_avr = max(avr_m_h, avr_m_v, avr_m_a, avr_p_h, avr_p_v, avr_p_a)
         
-        # Tentukan status global berdasarkan remark terburuk
         status_global = ISOZone.B.value
         if any("Short-term" in x for x in df_report['Remark']): status_global = ISOZone.C.value
         if any("damage" in x for x in df_report['Remark']): status_global = ISOZone.D.value
@@ -174,20 +175,17 @@ with tab1:
             
             st.subheader("📋 Tabel Laporan Vibrasi")
             
-            # Highlight Function untuk Tabel
             def highlight_row(row):
                 if "damage" in row['Remark']: return ['background-color: #ffcccc']*len(row)
                 elif "Short-term" in row['Remark']: return ['background-color: #fff3cd']*len(row)
                 else: return ['background-color: #d4edda']*len(row)
 
-            # Tampilkan Tabel mirip Excel
             st.dataframe(
                 res['df'].style.apply(highlight_row, axis=1).format({"DE": "{:.2f}", "NDE": "{:.2f}", "Avr": "{:.2f}", "Limit": "{:.2f}"}), 
                 use_container_width=True, 
                 hide_index=True
             )
             
-            # Gauge Global (Berdasarkan nilai Max Avr)
             c_g1, c_g2 = st.columns([1, 2])
             with c_g1:
                 fig = go.Figure(go.Indicator(
@@ -207,19 +205,46 @@ with tab1:
                     st.warning("Temuan Fisik: " + ", ".join(res['phys']))
 
 # ==============================================================================
-# TAB 2 & 3 (Sama seperti sebelumnya / Standard)
+# TAB 2: ELEKTRIKAL (Code Diringkas)
 # ==============================================================================
 with tab2:
-    st.info("Analisa Elektrikal (Sama seperti modul sebelumnya)")
-    # (Kode elektrikal disingkat agar muat, silakan copy dari versi sebelumnya jika perlu lengkap)
+    with st.form("elec_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"**Voltase ({asset.volt_rated}V)**")
+            v1 = st.number_input("R-S", value=asset.volt_rated)
+            v2 = st.number_input("S-T", value=asset.volt_rated)
+            v3 = st.number_input("T-R", value=asset.volt_rated)
+        with c2:
+            st.markdown(f"**Ampere ({asset.fla_rated}A)**")
+            i1 = st.number_input("R", value=asset.fla_rated*0.8)
+            i2 = st.number_input("S", value=asset.fla_rated*0.8)
+            i3 = st.number_input("T", value=asset.fla_rated*0.8)
+            ig = st.number_input("G", 0.0)
+        submit_elec = st.form_submit_button("ANALISA ELEKTRIKAL")
 
+    if submit_elec:
+        causes, vu, iu = analyze_electrical_health([v1,v2,v3], [i1,i2,i3], ig, asset.volt_rated, asset.fla_rated)
+        st.session_state.elec_result = {"causes": causes, "vu": vu, "iu": iu}
+
+    if st.session_state.elec_result:
+        res = st.session_state.elec_result
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Volt Unbalance", f"{res['vu']:.2f}%", "Max 3%")
+        col_m2.metric("Curr Unbalance", f"{res['iu']:.2f}%", "Max 10%")
+        col_m3.metric("Status", "FAULT" if res['causes'] else "OK")
+        if res['causes']:
+            for c in res['causes']: st.error(c)
+
+# ==============================================================================
+# TAB 3: KESIMPULAN
+# ==============================================================================
 with tab3:
     if st.button("GENERATE FINAL REPORT"):
         if st.session_state.mech_result:
             res = st.session_state.mech_result
             phys = res.get('phys', [])
             
-            # Logic sederhana untuk Final Report
             health = assess_overall_health(res['status'], "Normal", max(res['temps'].values()), phys)
             
             st.markdown(f"""
