@@ -261,21 +261,38 @@ with tab2:
             for c in res['causes']: st.error(c)
 
 # ==============================================================================
-# TAB 3: KESIMPULAN FINAL (UPDATED)
+# TAB 3: KESIMPULAN FINAL (FIXED - ELEKTRIKAL MASUK)
 # ==============================================================================
 with tab3:
     if st.button("GENERATE FINAL REPORT"):
-        # Pastikan sudah ada hasil analisa mekanikal
+        # Pastikan sudah ada hasil analisa mekanikal (Wajib)
         if st.session_state.mech_result:
-            res = st.session_state.mech_result
+            mech = st.session_state.mech_result
+            elec = st.session_state.elec_result # Ambil data elektrikal
             
-            # Ambil semua data pendukung
-            phys = res.get('phys', [])
-            causes = res.get('causes', []) # Ini adalah diagnosa teknis (Misalignment, dll)
-            temps_val = max(res['temps'].values()) if res.get('temps') else 0.0
+            # 1. Ambil Data Mekanikal
+            phys = mech.get('phys', [])
+            mech_causes = mech.get('causes', [])
+            temps_val = max(mech['temps'].values()) if mech.get('temps') else 0.0
             
-            # Panggil Logic 'Otak' Baru dengan parameter lengkap
-            health = assess_overall_health(res['status'], "Normal", temps_val, phys, causes)
+            # 2. Ambil Data Elektrikal (INI YANG TADI KURANG)
+            elec_causes = elec.get('causes', []) if elec else []
+            
+            # 3. Gabungkan Semua Diagnosa Teknis (Mekanikal + Elektrikal)
+            # Agar 'Otak' AI bisa membaca keduanya sekaligus
+            all_tech_diagnoses = mech_causes + elec_causes
+            
+            # 4. Tentukan Status Elektrikal untuk Severity
+            elec_status_str = "TRIP" if elec_causes else "Normal"
+            
+            # 5. Panggil Logic 'Otak' dengan Data Lengkap
+            health = assess_overall_health(
+                mech['status'],   # Status ISO Mekanikal
+                elec_status_str,  # Status Trip Elektrikal
+                temps_val,        # Max Suhu
+                phys,             # Temuan Fisik
+                all_tech_diagnoses # List Gabungan (Mekanikal + Elektrikal)
+            )
             
             # --- TAMPILAN LAPORAN UTAMA ---
             st.markdown(f"""
@@ -308,6 +325,21 @@ with tab3:
                         st.write(f"🔧 {rec}")
                 else:
                     st.write("• Lanjutkan maintenance rutin.")
+
+            # --- TAMPILAN STANDAR (FOOTER) ---
+            st.markdown("---")
+            st.caption("📚 **STANDAR REFERENSI YANG DIGUNAKAN DALAM ANALISA INI:**")
+            
+            if health['standards']:
+                std_html = ""
+                for std in health['standards']:
+                    std_html += f"<span style='background-color:#e2e6ea; padding:5px 10px; border-radius:15px; margin-right:5px; font-size:12px; display:inline-block; border:1px solid #ccc;'>📘 {std}</span>"
+                st.markdown(std_html, unsafe_allow_html=True)
+            else:
+                st.caption("ISO 10816-3 (Default)")
+                
+        else:
+            st.warning("⚠️ Harap jalankan Analisa Mekanikal (Tab 1) dulu sebelum Generate Report.")
 
             # --- TAMPILAN STANDAR (FOOTER) ---
             st.markdown("---")
