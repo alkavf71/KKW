@@ -55,7 +55,7 @@ with tab1:
             c1a, c1b = st.columns(2)
             with c1a:
                 st.caption("Titik DE")
-                m_de_h = st.number_input("M-DE Horiz", value=0.87) # Default Study Case
+                m_de_h = st.number_input("M-DE Horiz", value=0.87) 
                 m_de_v = st.number_input("M-DE Vert", value=0.22)
                 m_de_a = st.number_input("M-DE Axial", value=0.52)
                 t_m_de = st.number_input("Temp Motor DE (°C)", value=35.0) 
@@ -95,26 +95,22 @@ with tab1:
 
     # --- LOGIKA PEMBUATAN TABEL LAPORAN ---
     if submit_mech:
-        # 1. Tentukan Limit (Improvement Logic 4 Zona)
+        # 1. Tentukan Limit
         limit_warn = 4.50 if is_comm else asset.vib_limit_warning
         limit_trip = 7.10
-        
-        # Logic Zone A (New Machine)
-        # Jika limitnya 4.5, maka batas Zone A biasanya 2.3
         limit_zone_a = 2.30 if limit_warn >= 4.0 else 1.40
         
         # 2. Fungsi Helper Remark
         def get_remark(val):
-            if val < limit_zone_a: return ISOZone.A.value # New machine condition
-            elif val < limit_warn: return ISOZone.B.value # Unlimited
-            elif val < limit_trip: return ISOZone.C.value # Short-term
-            else: return ISOZone.D.value # Damage
+            if val < limit_zone_a: return ISOZone.A.value 
+            elif val < limit_warn: return ISOZone.B.value 
+            elif val < limit_trip: return ISOZone.C.value 
+            else: return ISOZone.D.value 
 
         # 3. Hitung Rata-rata PER SUMBU (DE + NDE) / 2
         avr_m_h = (m_de_h + m_nde_h) / 2
         avr_m_v = (m_de_v + m_nde_v) / 2
         avr_m_a = (m_de_a + m_nde_a) / 2
-        
         avr_p_h = (p_de_h + p_nde_h) / 2
         avr_p_v = (p_de_v + p_nde_v) / 2
         avr_p_a = (p_de_a + p_nde_a) / 2
@@ -131,7 +127,7 @@ with tab1:
         
         df_report = pd.DataFrame(data, columns=["Unit", "Axis", "DE", "NDE", "Avr", "Limit", "Remark"])
         
-        # 5. Diagnosa Teknis
+        # 5. DIAGNOSA TEKNIS (VIBRASI & SUHU)
         readings = [
             VibPoint("Motor DE", "Horizontal", m_de_h), VibPoint("Motor DE", "Vertical", m_de_v), VibPoint("Motor DE", "Axial", m_de_a),
             VibPoint("Motor NDE", "Horizontal", m_nde_h), VibPoint("Motor NDE", "Vertical", m_nde_v), VibPoint("Motor NDE", "Axial", m_nde_a),
@@ -139,21 +135,38 @@ with tab1:
             VibPoint("Pump NDE", "Horizontal", p_nde_h), VibPoint("Pump NDE", "Vertical", p_nde_v), VibPoint("Pump NDE", "Axial", p_nde_a)
         ]
         
-        # FIX NAME ERROR: Pakai limit_warn, bukan limit
+        # A. Analisa Vibrasi
         vib_causes = analyze_vibration_matrix(readings, limit_warn)
+        
+        # B. Analisa Noise
+        noise_causes = analyze_noise_profile(noise, loc, v_test)
+
+        # C. Analisa Suhu (INI YANG TADI LUPA DISAMBUNGKAN)
+        # Kita buat dictionary input suhu yang lengkap
+        temp_inputs = {
+            "Motor DE": t_m_de, "Motor NDE": t_m_nde,
+            "Pump DE": t_p_de,  "Pump NDE": t_p_nde
+        }
+        # Cek apakah vibrasi axial tinggi (untuk diagnosa misalignment)
+        is_axial_high = (avr_m_a > limit_warn) or (avr_p_a > limit_warn)
+        
+        # Panggil Modul Diagnosa Suhu (Limit 85 derajat)
+        temp_causes = analyze_temperature_profile(temp_inputs, 85.0, noise, is_axial_high)
+        
+        # GABUNGKAN SEMUA DIAGNOSA
+        final_causes = vib_causes + noise_causes + temp_causes
         
         # 6. Simpan Hasil
         max_avr = max(avr_m_h, avr_m_v, avr_m_a, avr_p_h, avr_p_v, avr_p_a)
         
         # Determine Status Global
         status_global = ISOZone.B.value
-        if any("New machine" in x for x in df_report['Remark']): status_global = ISOZone.A.value # Jika mayoritas A
+        if any("New machine" in x for x in df_report['Remark']): status_global = ISOZone.A.value 
         if any("Short-term" in x for x in df_report['Remark']): status_global = ISOZone.C.value
         if any("damage" in x for x in df_report['Remark']): status_global = ISOZone.D.value
         
-        # Warna Gauge Global
-        color_global = "#a3e048" # Zone B default
-        if "New machine" in status_global: color_global = "#2ecc71" # Zone A (Hijau Tua)
+        color_global = "#a3e048"
+        if "New machine" in status_global: color_global = "#2ecc71"
         if "Short-term" in status_global: color_global = "#f1c40f"
         if "damage" in status_global: color_global = "#e74c3c"
 
@@ -168,7 +181,7 @@ with tab1:
             "max_val": max_avr,
             "status": status_global,
             "color": color_global,
-            "causes": vib_causes,
+            "causes": final_causes, # Sudah termasuk suhu
             "phys": phys_list,
             "temps": temps
         }
@@ -184,7 +197,7 @@ with tab1:
                 if "damage" in row['Remark']: return ['background-color: #ffcccc']*len(row)
                 elif "Short-term" in row['Remark']: return ['background-color: #fff3cd']*len(row)
                 elif "New machine" in row['Remark']: return ['background-color: #d4edda; font-weight: bold']*len(row)
-                else: return ['background-color: #e2e3e5']*len(row) # Zone B biasa
+                else: return ['background-color: #e2e3e5']*len(row)
 
             st.dataframe(
                 res['df'].style.apply(highlight_row, axis=1).format({"DE": "{:.2f}", "NDE": "{:.2f}", "Avr": "{:.2f}", "Limit": "{:.2f}"}), 
@@ -204,11 +217,16 @@ with tab1:
             
             with c_g2:
                 st.info(f"**STATUS UNIT: {res['status']}**")
+                
+                # TAMPILKAN DIAGNOSA (Termasuk Suhu)
                 if res['causes']:
-                    st.error("Diagnosa Teknis:")
+                    st.error("🚨 **DIAGNOSA PENYEBAB (Vibrasi/Suhu/Noise):**")
                     for c in res['causes']: st.write(f"• {c}")
+                else:
+                    st.success("✅ Tidak ada indikasi kerusakan teknis.")
+                    
                 if res['phys']:
-                    st.warning("Temuan Fisik: " + ", ".join(res['phys']))
+                    st.warning("⚠️ Temuan Fisik: " + ", ".join(res['phys']))
 
 # ==============================================================================
 # TAB 2: ELEKTRIKAL
@@ -261,3 +279,8 @@ with tab3:
                 <b>REKOMENDASI:</b><br>{health['action']}
             </div>
             """, unsafe_allow_html=True)
+            
+            if health['reasons']:
+                st.write("")
+                st.error("**FAKTOR PENYEBAB:**")
+                for r in health['reasons']: st.write(f"❌ {r}")
