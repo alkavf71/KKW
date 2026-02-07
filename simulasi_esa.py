@@ -99,17 +99,26 @@ with tab1:
             # Tombol Submit ada di dalam Form (Indentation benar)
             submit_mech = st.form_submit_button("🔍 GENERATE TABEL LAPORAN")
 
-    # --- LOGIKA PEMBUATAN TABEL LAPORAN ---
+# --- LOGIKA PEMBUATAN TABEL LAPORAN (UPDATED) ---
     if submit_mech:
-        # 1. Tentukan Limit
-        limit = 3.0 if is_comm else asset.vib_limit_warning
-        limit_trip = 7.1 
+        # 1. Tentukan Limit (Sesuai ISO 10816-3 Class II Medium Machines)
+        limit_warn = asset.vib_limit_warning # Biasanya 4.50 (Batas B ke C)
+        limit_trip = 7.10                    # Biasanya 7.10 (Batas C ke D)
         
-        # 2. Fungsi Helper Remark
-        def get_remark(val, lim_warn, lim_trip):
-            if val < lim_warn: return ISOZone.B.value 
-            elif val < lim_trip: return ISOZone.C.value 
-            else: return ISOZone.D.value 
+        # IMPROVEMENT: Tambahkan batas Zone A (Biasanya 2.30 untuk limit 4.50)
+        # Jika limit aset kecil (2.80), batas A biasanya 1.40
+        limit_zone_a = 2.30 if limit_warn >= 4.0 else 1.40
+        
+        # 2. Fungsi Helper Penentuan Remark per Baris (4 ZONA LENGKAP)
+        def get_remark(val):
+            if val < limit_zone_a: 
+                return ISOZone.A.value # "New machine condition" (KOREKSI ANDA)
+            elif val < limit_warn: 
+                return ISOZone.B.value # "Unlimited long-term..."
+            elif val < limit_trip: 
+                return ISOZone.C.value # "Short-term..."
+            else: 
+                return ISOZone.D.value # "Vibration causes damage"
 
         # 3. Hitung Rata-rata PER SUMBU (DE + NDE) / 2
         avr_m_h = (m_de_h + m_nde_h) / 2
@@ -120,14 +129,14 @@ with tab1:
         avr_p_v = (p_de_v + p_nde_v) / 2
         avr_p_a = (p_de_a + p_nde_a) / 2
 
-        # 4. Buat DataFrame
+        # 4. Buat DataFrame (Panggil get_remark tanpa parameter limit lagi)
         data = [
-            ["Driver", "H", m_de_h, m_nde_h, avr_m_h, limit, get_remark(avr_m_h, limit, limit_trip)],
-            ["Driver", "V", m_de_v, m_nde_v, avr_m_v, limit, get_remark(avr_m_v, limit, limit_trip)],
-            ["Driver", "A", m_de_a, m_nde_a, avr_m_a, limit, get_remark(avr_m_a, limit, limit_trip)],
-            ["Driven", "H", p_de_h, p_nde_h, avr_p_h, limit, get_remark(avr_p_h, limit, limit_trip)],
-            ["Driven", "V", p_de_v, p_nde_v, avr_p_v, limit, get_remark(avr_p_v, limit, limit_trip)],
-            ["Driven", "A", p_de_a, p_nde_a, avr_p_a, limit, get_remark(avr_p_a, limit, limit_trip)],
+            ["Driver", "H", m_de_h, m_nde_h, avr_m_h, limit_warn, get_remark(avr_m_h)],
+            ["Driver", "V", m_de_v, m_nde_v, avr_m_v, limit_warn, get_remark(avr_m_v)],
+            ["Driver", "A", m_de_a, m_nde_a, avr_m_a, limit_warn, get_remark(avr_m_a)],
+            ["Driven", "H", p_de_h, p_nde_h, avr_p_h, limit_warn, get_remark(avr_p_h)],
+            ["Driven", "V", p_de_v, p_nde_v, avr_p_v, limit_warn, get_remark(avr_p_v)],
+            ["Driven", "A", p_de_a, p_nde_a, avr_p_a, limit_warn, get_remark(avr_p_a)],
         ]
         
         df_report = pd.DataFrame(data, columns=["Unit", "Axis", "DE", "NDE", "Avr", "Limit", "Remark"])
