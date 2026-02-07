@@ -1,14 +1,26 @@
 from enum import Enum
 
 class ISOZone(Enum):
-    A = "ZONE A: New machine condition (Kondisi Prima)"
-    B = "ZONE B: Unlimited long-term operation allowable (Operasi Normal)"
-    C = "ZONE C: Short-term operation allowable (WARNING: Operasi Terbatas)"
-    D = "ZONE D: Vibration causes damage (DANGER: Kerusakan Fisik)"
+    """
+    ISO 10816-3 Vibration Severity Zones
+    Deskripsi Standar Internasional
+    """
+    A = "ZONE A: New machine condition"
+    B = "ZONE B: Unlimited long-term operation allowable"
+    C = "ZONE C: Short-term operation allowable"
+    D = "ZONE D: Vibration causes damage"
 
 class Limits:
+    """
+    Database Limit Standar (Bisa di-override oleh database aset)
+    """
+    # Electrical Limits (NEMA/ANSI)
     VOLT_UNBALANCE_LIMIT = 3.0
     CURR_UNBALANCE_LIMIT = 10.0
-    VIB_WARN_DEFAULT = 2.80
-    VIB_TRIP_DEFAULT = 7.10
+    
+    # Mechanical Limits Default (ISO 10816 Rigid)
+    VIB_WARN_DEFAULT = 2.80  # Batas Zone B ke C
+    VIB_TRIP_DEFAULT = 7.10  # Batas Zone C ke D
+    
+    # Temperature Limits
     TEMP_BEARING_STD = 85.0
