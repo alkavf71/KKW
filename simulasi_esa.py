@@ -340,19 +340,3 @@ with tab3:
                 
         else:
             st.warning("⚠️ Harap jalankan Analisa Mekanikal (Tab 1) dulu sebelum Generate Report.")
-
-            # --- TAMPILAN STANDAR (FOOTER) ---
-            st.markdown("---")
-            st.caption("📚 **STANDAR REFERENSI YANG DIGUNAKAN DALAM ANALISA INI:**")
-            
-            # Tampilkan standar dalam bentuk tags
-            if health['standards']:
-                std_html = ""
-                for std in health['standards']:
-                    std_html += f"<span style='background-color:#e2e6ea; padding:5px 10px; border-radius:15px; margin-right:5px; font-size:12px; display:inline-block; border:1px solid #ccc;'>📘 {std}</span>"
-                st.markdown(std_html, unsafe_allow_html=True)
-            else:
-                st.caption("ISO 10816-3 (Default)")
-                
-        else:
-            st.warning("⚠️ Harap jalankan Analisa Mekanikal (Tab 1) dulu sebelum Generate Report.")
