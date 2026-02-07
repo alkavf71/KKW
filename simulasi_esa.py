@@ -307,7 +307,7 @@ def main():
             csv = hist_df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download CSV", csv, "history.csv", "text/csv")
 
-    st.title(f"Dashboard Diagnosa: {asset.tag}")
+    st.title(f"Under Construction by Alkap Corp: {asset.tag}")
     tab1, tab2, tab3 = st.tabs(["🌊 Mechanical", "⚡ Electrical", "🚀 Commissioning"])
 
     # === TAB 1: MECHANICAL ===
