@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime
 
 # --- IMPORT MODULES ---
-# Pastikan folder 'modules' ada dan berisi file-file yang sudah kita buat
 from modules.asset_database import get_asset_list, get_asset_details
 from modules.standards import ISOZone
 from modules.vibration_diagnostics import analyze_vibration_matrix, VibPoint
@@ -24,7 +23,7 @@ if 'health_result' not in st.session_state: st.session_state.health_result = Non
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("🏭 Reliability Pro")
-    st.caption("Standard: Average per Axis (DE+NDE)/2")
+    st.caption("Standard: ISO 10816-3 (4 Zones)")
     
     activity_type = st.radio("Jenis Aktivitas:", ["Inspeksi Rutin", "Commissioning"])
     is_comm = "Commissioning" in activity_type
@@ -56,35 +55,31 @@ with tab1:
             c1a, c1b = st.columns(2)
             with c1a:
                 st.caption("Titik DE")
-                m_de_h = st.number_input("M-DE Horiz", value=5.46)
-                m_de_v = st.number_input("M-DE Vert", value=2.48)
-                m_de_a = st.number_input("M-DE Axial", value=9.31)
-                # PERBAIKAN: Label dibedakan (Motor)
-                t_m_de = st.number_input("Temp Motor DE (°C)", value=40.0) 
+                m_de_h = st.number_input("M-DE Horiz", value=0.87) # Default Study Case
+                m_de_v = st.number_input("M-DE Vert", value=0.22)
+                m_de_a = st.number_input("M-DE Axial", value=0.52)
+                t_m_de = st.number_input("Temp Motor DE (°C)", value=35.0) 
             with c1b:
                 st.caption("Titik NDE")
-                m_nde_h = st.number_input("M-NDE Horiz", value=4.41)
-                m_nde_v = st.number_input("M-NDE Vert", value=6.89)
-                m_nde_a = st.number_input("M-NDE Axial", value=8.11)
-                # PERBAIKAN: Label dibedakan (Motor)
-                t_m_nde = st.number_input("Temp Motor NDE (°C)", value=40.0)
+                m_nde_h = st.number_input("M-NDE Horiz", value=1.55)
+                m_nde_v = st.number_input("M-NDE Vert", value=1.04)
+                m_nde_a = st.number_input("M-NDE Axial", value=1.38)
+                t_m_nde = st.number_input("Temp Motor NDE (°C)", value=33.0)
 
             st.markdown("#### DRIVEN (Pompa)")
             c2a, c2b = st.columns(2)
             with c2a:
                 st.caption("Titik DE")
-                p_de_h = st.number_input("P-DE Horiz", value=1.62)
-                p_de_v = st.number_input("P-DE Vert", value=6.70)
-                p_de_a = st.number_input("P-DE Axial", value=2.05)
-                # PERBAIKAN: Label dibedakan (Pompa)
-                t_p_de = st.number_input("Temp Pompa DE (°C)", value=36.0)
+                p_de_h = st.number_input("P-DE Horiz", value=1.67)
+                p_de_v = st.number_input("P-DE Vert", value=1.54)
+                p_de_a = st.number_input("P-DE Axial", value=1.22)
+                t_p_de = st.number_input("Temp Pompa DE (°C)", value=33.0)
             with c2b:
                 st.caption("Titik NDE")
-                p_nde_h = st.number_input("P-NDE Horiz", value=1.23)
-                p_nde_v = st.number_input("P-NDE Vert", value=4.00)
-                p_nde_a = st.number_input("P-NDE Axial", value=5.22)
-                # PERBAIKAN: Label dibedakan (Pompa)
-                t_p_nde = st.number_input("Temp Pompa NDE (°C)", value=40.0)
+                p_nde_h = st.number_input("P-NDE Horiz", value=0.95)
+                p_nde_v = st.number_input("P-NDE Vert", value=0.57)
+                p_nde_a = st.number_input("P-NDE Axial", value=0.83)
+                t_p_nde = st.number_input("Temp Pompa NDE (°C)", value=30.0)
 
             st.divider()
             st.markdown("**Inspeksi Fisik & Noise:**")
@@ -96,29 +91,24 @@ with tab1:
             chk_guard = st.checkbox("MAJOR: Guard Hilang")
             chk_baut = st.checkbox("MINOR: Baut Kendor")
             
-            # Tombol Submit ada di dalam Form (Indentation benar)
             submit_mech = st.form_submit_button("🔍 GENERATE TABEL LAPORAN")
 
-# --- LOGIKA PEMBUATAN TABEL LAPORAN (UPDATED) ---
+    # --- LOGIKA PEMBUATAN TABEL LAPORAN ---
     if submit_mech:
-        # 1. Tentukan Limit (Sesuai ISO 10816-3 Class II Medium Machines)
-        limit_warn = asset.vib_limit_warning # Biasanya 4.50 (Batas B ke C)
-        limit_trip = 7.10                    # Biasanya 7.10 (Batas C ke D)
+        # 1. Tentukan Limit (Improvement Logic 4 Zona)
+        limit_warn = 4.50 if is_comm else asset.vib_limit_warning
+        limit_trip = 7.10
         
-        # IMPROVEMENT: Tambahkan batas Zone A (Biasanya 2.30 untuk limit 4.50)
-        # Jika limit aset kecil (2.80), batas A biasanya 1.40
+        # Logic Zone A (New Machine)
+        # Jika limitnya 4.5, maka batas Zone A biasanya 2.3
         limit_zone_a = 2.30 if limit_warn >= 4.0 else 1.40
         
-        # 2. Fungsi Helper Penentuan Remark per Baris (4 ZONA LENGKAP)
+        # 2. Fungsi Helper Remark
         def get_remark(val):
-            if val < limit_zone_a: 
-                return ISOZone.A.value # "New machine condition" (KOREKSI ANDA)
-            elif val < limit_warn: 
-                return ISOZone.B.value # "Unlimited long-term..."
-            elif val < limit_trip: 
-                return ISOZone.C.value # "Short-term..."
-            else: 
-                return ISOZone.D.value # "Vibration causes damage"
+            if val < limit_zone_a: return ISOZone.A.value # New machine condition
+            elif val < limit_warn: return ISOZone.B.value # Unlimited
+            elif val < limit_trip: return ISOZone.C.value # Short-term
+            else: return ISOZone.D.value # Damage
 
         # 3. Hitung Rata-rata PER SUMBU (DE + NDE) / 2
         avr_m_h = (m_de_h + m_nde_h) / 2
@@ -129,7 +119,7 @@ with tab1:
         avr_p_v = (p_de_v + p_nde_v) / 2
         avr_p_a = (p_de_a + p_nde_a) / 2
 
-        # 4. Buat DataFrame (Panggil get_remark tanpa parameter limit lagi)
+        # 4. Buat DataFrame
         data = [
             ["Driver", "H", m_de_h, m_nde_h, avr_m_h, limit_warn, get_remark(avr_m_h)],
             ["Driver", "V", m_de_v, m_nde_v, avr_m_v, limit_warn, get_remark(avr_m_v)],
@@ -148,16 +138,22 @@ with tab1:
             VibPoint("Pump DE", "Horizontal", p_de_h), VibPoint("Pump DE", "Vertical", p_de_v), VibPoint("Pump DE", "Axial", p_de_a),
             VibPoint("Pump NDE", "Horizontal", p_nde_h), VibPoint("Pump NDE", "Vertical", p_nde_v), VibPoint("Pump NDE", "Axial", p_nde_a)
         ]
-        vib_causes = analyze_vibration_matrix(readings, limit)
+        
+        # FIX NAME ERROR: Pakai limit_warn, bukan limit
+        vib_causes = analyze_vibration_matrix(readings, limit_warn)
         
         # 6. Simpan Hasil
         max_avr = max(avr_m_h, avr_m_v, avr_m_a, avr_p_h, avr_p_v, avr_p_a)
         
+        # Determine Status Global
         status_global = ISOZone.B.value
+        if any("New machine" in x for x in df_report['Remark']): status_global = ISOZone.A.value # Jika mayoritas A
         if any("Short-term" in x for x in df_report['Remark']): status_global = ISOZone.C.value
         if any("damage" in x for x in df_report['Remark']): status_global = ISOZone.D.value
         
-        color_global = "#2ecc71"
+        # Warna Gauge Global
+        color_global = "#a3e048" # Zone B default
+        if "New machine" in status_global: color_global = "#2ecc71" # Zone A (Hijau Tua)
         if "Short-term" in status_global: color_global = "#f1c40f"
         if "damage" in status_global: color_global = "#e74c3c"
 
@@ -187,7 +183,8 @@ with tab1:
             def highlight_row(row):
                 if "damage" in row['Remark']: return ['background-color: #ffcccc']*len(row)
                 elif "Short-term" in row['Remark']: return ['background-color: #fff3cd']*len(row)
-                else: return ['background-color: #d4edda']*len(row)
+                elif "New machine" in row['Remark']: return ['background-color: #d4edda; font-weight: bold']*len(row)
+                else: return ['background-color: #e2e3e5']*len(row) # Zone B biasa
 
             st.dataframe(
                 res['df'].style.apply(highlight_row, axis=1).format({"DE": "{:.2f}", "NDE": "{:.2f}", "Avr": "{:.2f}", "Limit": "{:.2f}"}), 
@@ -214,7 +211,7 @@ with tab1:
                     st.warning("Temuan Fisik: " + ", ".join(res['phys']))
 
 # ==============================================================================
-# TAB 2: ELEKTRIKAL (Code Diringkas)
+# TAB 2: ELEKTRIKAL
 # ==============================================================================
 with tab2:
     with st.form("elec_form"):
