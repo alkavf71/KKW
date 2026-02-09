@@ -2,141 +2,227 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-def diagnosa_vibrasi(h_val, v_val, a_val, limit):
+# --- 1. DEFINISI STANDAR ISO 10816-3 & WARNA ---
+def get_iso_zone(value, machine_class):
     """
-    Logika Diagnosa Awal berdasarkan Pola Arah Getaran.
-    Dasar: Praktik umum Analisa Getaran (Mobius/API) dikombinasikan dengan limit ISO.
+    Menentukan Zona ISO dan Warna berdasarkan Velocity RMS (mm/s).
     """
-    max_val = max(h_val, v_val, a_val)
-    diagnosa = []
-    
-    # 1. Cek Severity (Keparahan) berdasarkan ISO 10816
-    if max_val <= limit:
-        status = "Good/Satisfactory"
-        color = "green"
-    elif max_val <= (limit * 1.5): # Asumsi Zone C awal
-        status = "Alert (Investigate)"
-        color = "orange"
-    else:
-        status = "Danger (Action Required)"
-        color = "red"
-
-    # 2. Cek Pola Masalah (Root Cause Analysis Sederhana)
-    if status != "Good/Satisfactory":
-        # Cek Misalignment: Axial dominan (biasanya > 50% dari radial tertinggi)
-        if a_val > (0.5 * max(h_val, v_val)) and a_val > limit:
-            diagnosa.append("Indikasi Misalignment (Poros tidak lurus)")
-        
-        # Cek Unbalance: Radial (H atau V) tinggi, Axial rendah
-        if (h_val > limit or v_val > limit) and a_val < (0.5 * max(h_val, v_val)):
-            diagnosa.append("Indikasi Unbalance (Ketidakseimbangan Massa)")
-            
-        # Cek Looseness/Soft Foot: Vertikal jauh lebih tinggi dari Horizontal (pada tumpuan)
-        if v_val > (1.5 * h_val) and v_val > limit:
-            diagnosa.append("Indikasi Mechanical Looseness / Soft Foot")
-            
-        if not diagnosa:
-            diagnosa.append("Getaran Umum Tinggi (Perlu Analisa Spektrum)")
-    else:
-        diagnosa.append("Operasi Normal")
-
-    return status, ", ".join(diagnosa), color
-
-def app():
-    st.header("⚙️ Inspeksi Mekanikal & Vibrasi")
-    st.subheader("Input Data Vibrasi (Velocity RMS mm/s)")
-
-    # 1. Konfigurasi Mesin (Untuk menentukan Limit ISO)
-    col_conf1, col_conf2 = st.columns(2)
-    with col_conf1:
-        machine_class = st.selectbox("Kelas Mesin (ISO 10816)", 
-                                     ["Class I (Kecil <15kW)", "Class II (Medium 15-300kW)", "Class III (Besar >300kW Rigid)", "Class IV (Besar Soft)"], index=1)
-    
-    # Tentukan Limit berdasarkan Kelas (Contoh simplified)
+    # Batas Limit [Batas A/B, Batas B/C, Batas C/D]
+    # Referensi: ISO 10816-3 untuk Rigid Foundation (Umum di pompa)
     limits = {
-        "Class I (Kecil <15kW)": 2.8,   # Batas Zone B/C
-        "Class II (Medium 15-300kW)": 4.5, # Batas Zone B/C (Sesuai screenshot Anda)
-        "Class III (Besar >300kW Rigid)": 7.1,
-        "Class IV (Besar Soft)": 11.2
+        "Class I (Kecil <15kW)": [0.71, 1.80, 4.50],
+        "Class II (Medium 15-300kW)": [1.12, 2.80, 4.50], # Standard Pompa Sentrifugal
+        "Class III (Besar >300kW Rigid)": [1.80, 4.50, 7.10],
+        "Class IV (Besar Soft)": [2.80, 7.10, 11.20]
     }
-    limit_iso = limits[machine_class]
+    
+    lim = limits[machine_class]
+    
+    # Logika Penentuan Zona & Warna
+    if value < lim[0]:
+        # ZONE A: Green
+        return "A", "New machine condition", "green"
+    elif value < lim[1]:
+        # ZONE B: Yellow
+        return "B", "Unlimited long-term operation allowable", "yellow"
+    elif value < lim[2]:
+        # ZONE C: Orange
+        return "C", "Short-term operation allowable", "orange"
+    else:
+        # ZONE D: Red
+        return "D", "Vibration causes damage", "red"
+
+# --- 2. LOGIKA DIAGNOSA KERUSAKAN (AI DIAGNOSTIC) ---
+def analyze_root_cause(h_val, v_val, a_val, warning_threshold):
+    """
+    Diagnosa akar masalah (Misalignment, Unbalance, Looseness, Bearing)
+    berdasarkan perbandingan arah getaran.
+    """
+    diagnosa = []
+    rekomendasi = []
+    
+    # Ambil nilai tertinggi untuk safety factor
+    max_val = max(h_val, v_val, a_val)
+    
+    # Jika getaran masih Zona A atau B (Aman/Kuning), diagnosa normal
+    # Kita ambil threshold batas B ke C (misal 2.80 untuk Class II)
+    if max_val < warning_threshold:
+        return ["Kondisi Normal"], ["Lanjutkan monitoring rutin (Predictive Maintenance)"]
+
+    # --- RULE 1: MISALIGNMENT (Ketidaklurusan) ---
+    # Ciri: Getaran Axial tinggi (Dominan > 50% dari Radial tertinggi)
+    if a_val > (0.5 * max(h_val, v_val)) and a_val > (warning_threshold * 0.8):
+        diagnosa.append("Angular Misalignment (Poros Miring)")
+        rekomendasi.append("Cek alignment kopling (Laser/Dial). Pastikan offset < 0.05mm.")
+        rekomendasi.append("Cek 'Pipe Strain' (Pipa menekan pompa).")
+
+    # --- RULE 2: UNBALANCE (Tidak Seimbang) ---
+    # Ciri: Radial (H/V) tinggi, Axial rendah. Biasanya frekuensi 1x RPM.
+    if (h_val > warning_threshold or v_val > warning_threshold) and a_val < (0.5 * max(h_val, v_val)):
+        diagnosa.append("Unbalance (Massa Tidak Seimbang)")
+        rekomendasi.append("Cek fisik impeller/kipas motor dari kotoran/kerak.")
+        rekomendasi.append("Lakukan balancing ulang (Standar G2.5/G6.3).")
+
+    # --- RULE 3: MECHANICAL LOOSENESS / SOFT FOOT ---
+    # Ciri: Vertikal jauh lebih tinggi dari Horizontal pada tumpuan.
+    if v_val > (1.5 * h_val) and v_val > warning_threshold:
+        diagnosa.append("Mechanical Looseness / Soft Foot")
+        rekomendasi.append("Kencangkan baut angkur (Anchor Bolt).")
+        rekomendasi.append("Cek kerataan kaki motor (Soft foot) dengan feeler gauge.")
+
+    # --- RULE 4: BEARING ISSUE (Umum) ---
+    # Jika getaran tinggi tapi pola tidak spesifik ke arah tertentu
+    if not diagnosa: # Jika list diagnosa masih kosong tapi nilai tinggi
+        diagnosa.append("Indikasi Kerusakan Bearing / Kavitasi")
+        rekomendasi.append("Cek lubrikasi (Greasing).")
+        rekomendasi.append("Analisa suara bearing (Stetoskop).")
+        rekomendasi.append("Cek tekanan suction (Kavitasi).")
+
+    return diagnosa, rekomendasi
+
+# --- 3. APLIKASI UTAMA ---
+def app():
+    st.header("⚙️ Inspeksi Mekanikal & Vibrasi (ISO 10816)")
+    st.markdown("---")
+
+    # --- A. SETUP ---
+    col_conf1, col_conf2 = st.columns([3, 1])
+    with col_conf1:
+        machine_class = st.selectbox(
+            "Klasifikasi Mesin (ISO 10816-3)", 
+            [
+                "Class I (Kecil <15kW)", 
+                "Class II (Medium 15-300kW)", 
+                "Class III (Besar >300kW Rigid)", 
+                "Class IV (Besar Soft)"
+            ], 
+            index=1,
+            help="Pilih Class II untuk pompa standar industri Pertamina."
+        )
+    
+    # Tentukan limit ambang batas Warning (Zona C) untuk trigger diagnosa
+    limits_map = {
+        "Class I (Kecil <15kW)": 1.80,
+        "Class II (Medium 15-300kW)": 2.80, # Batas Kuning ke Oranye
+        "Class III (Besar >300kW Rigid)": 4.50,
+        "Class IV (Besar Soft)": 7.10
+    }
+    warning_threshold = limits_map[machine_class]
+
     with col_conf2:
-        st.metric("Limit ISO (Zone B/C)", f"{limit_iso} mm/s")
+        st.metric("Batas Alert (Zona C)", f"{warning_threshold} mm/s")
 
-    st.divider()
-
-    # 2. Form Input (Layout seperti Laporan Pertamina)
+    # --- B. INPUT DATA ---
+    st.subheader("Input Data Vibrasi (Velocity RMS)")
     col1, col2 = st.columns(2)
     
-    # DRIVER (MOTOR)
     with col1:
-        st.info("DRIVER (MOTOR)")
-        # Horizontal
-        d_h_de = st.number_input("Driver H - DE", 0.0, 100.0, 1.31, step=0.01)
-        d_h_nde = st.number_input("Driver H - NDE", 0.0, 100.0, 2.96, step=0.01)
-        # Vertical
-        d_v_de = st.number_input("Driver V - DE", 0.0, 100.0, 4.49, step=0.01)
-        d_v_nde = st.number_input("Driver V - NDE", 0.0, 100.0, 9.80, step=0.01)
-        # Axial
-        d_a_de = st.number_input("Driver A - DE", 0.0, 100.0, 2.24, step=0.01)
-        d_a_nde = st.number_input("Driver A - NDE", 0.0, 100.0, 2.50, step=0.01)
+        st.info("🔌 DRIVER (MOTOR)")
+        d_h_de = st.number_input("H - DE (Motor)", 0.00, 50.00, 1.31)
+        d_h_nde = st.number_input("H - NDE (Motor)", 0.00, 50.00, 2.96)
+        st.write("") # Spacer
+        d_v_de = st.number_input("V - DE (Motor)", 0.00, 50.00, 4.49)
+        d_v_nde = st.number_input("V - NDE (Motor)", 0.00, 50.00, 9.80)
+        st.write("")
+        d_a_de = st.number_input("A - DE (Motor)", 0.00, 50.00, 2.24)
+        d_a_nde = st.number_input("A - NDE (Motor)", 0.00, 50.00, 2.50)
 
-    # DRIVEN (POMPA)
     with col2:
-        st.warning("DRIVEN (POMPA)")
-        # Horizontal
-        p_h_de = st.number_input("Driven H - DE", 0.0, 100.0, 3.73, step=0.01)
-        p_h_nde = st.number_input("Driven H - NDE", 0.0, 100.0, 1.80, step=0.01)
-        # Vertical
-        p_v_de = st.number_input("Driven V - DE", 0.0, 100.0, 4.89, step=0.01)
-        p_v_nde = st.number_input("Driven V - NDE", 0.0, 100.0, 1.76, step=0.01)
-        # Axial
-        p_a_de = st.number_input("Driven A - DE", 0.0, 100.0, 4.13, step=0.01)
-        p_a_nde = st.number_input("Driven A - NDE", 0.0, 100.0, 3.07, step=0.01)
+        st.warning("💧 DRIVEN (POMPA)")
+        p_h_de = st.number_input("H - DE (Pompa)", 0.00, 50.00, 3.73)
+        p_h_nde = st.number_input("H - NDE (Pompa)", 0.00, 50.00, 1.80)
+        st.write("")
+        p_v_de = st.number_input("V - DE (Pompa)", 0.00, 50.00, 4.89)
+        p_v_nde = st.number_input("V - NDE (Pompa)", 0.00, 50.00, 1.76)
+        st.write("")
+        p_a_de = st.number_input("A - DE (Pompa)", 0.00, 50.00, 4.13)
+        p_a_nde = st.number_input("A - NDE (Pompa)", 0.00, 50.00, 3.07)
 
-    # 3. Kalkulasi & Diagnosa
-    if st.button("Analisa & Generate Report"):
+    # --- C. PROSES ---
+    if st.button("📊 Analisa & Generate Report", type="primary"):
         
-        # Helper untuk hitung rata-rata
-        def calc_row(label, h_de, h_nde, v_de, v_nde, a_de, a_nde):
-            # Rata-rata per Axis
+        # --- LOGIC TABLE GENERATION ---
+        def create_table_row(comp_name, h_de, h_nde, v_de, v_nde, a_de, a_nde):
+            # 1. Hitung Average (Sesuai format user)
             avg_h = (h_de + h_nde) / 2
             avg_v = (v_de + v_nde) / 2
             avg_a = (a_de + a_nde) / 2
-            
-            # Diagnosa berdasarkan nilai MAX per axis (bukan rata-rata, agar lebih aman)
-            # Kita ambil nilai max dari DE/NDE untuk diagnosa agar tidak false negative
-            max_h = max(h_de, h_nde)
-            max_v = max(v_de, v_nde)
-            max_a = max(a_de, a_nde)
-            
-            status, diagnosis_text, color = diagnosa_vibrasi(max_h, max_v, max_a, limit_iso)
-            
-            return [
-                {"Point": label, "Dir": "H", "DE": h_de, "NDE": h_nde, "Avr": avg_h, "Limit": limit_iso, "Remark": diagnosis_text if avg_h > limit_iso else "Normal"},
-                {"Point": "", "Dir": "V", "DE": v_de, "NDE": v_nde, "Avr": avg_v, "Limit": limit_iso, "Remark": diagnosis_text if avg_v > limit_iso else "Normal"},
-                {"Point": "", "Dir": "A", "DE": a_de, "NDE": a_nde, "Avr": avg_a, "Limit": limit_iso, "Remark": diagnosis_text if avg_a > limit_iso else "Normal"}
+
+            # 2. Cari Remark & Zone berdasarkan nilai Average
+            # (Jika user ingin remark berdasarkan Max value, ganti avg_h dengan max(h_de, h_nde))
+            z_h, rem_h, _ = get_iso_zone(avg_h, machine_class)
+            z_v, rem_v, _ = get_iso_zone(avg_v, machine_class)
+            z_a, rem_a, _ = get_iso_zone(avg_a, machine_class)
+
+            rows = [
+                [f"{comp_name} H", h_de, h_nde, avg_h, z_h, rem_h],
+                [f"{comp_name} V", v_de, v_nde, avg_v, z_v, rem_v],
+                [f"{comp_name} A", a_de, a_nde, avg_a, z_a, rem_a]
             ]
+            
+            # 3. Diagnosa Kerusakan (Pakai MAX value agar sensitif)
+            max_h, max_v, max_a = max(h_de, h_nde), max(v_de, v_nde), max(a_de, a_nde)
+            diag, rec = analyze_root_cause(max_h, max_v, max_a, warning_threshold)
+            
+            return rows, diag, rec
 
-        data_rows = []
-        data_rows.extend(calc_row("Driver", d_h_de, d_h_nde, d_v_de, d_v_nde, d_a_de, d_a_nde))
-        data_rows.extend(calc_row("Driven", p_h_de, p_h_nde, p_v_de, p_v_nde, p_a_de, p_a_nde))
+        # Generate Data
+        rows_d, diag_d, rec_d = create_table_row("Driver", d_h_de, d_h_nde, d_v_de, d_v_nde, d_a_de, d_a_nde)
+        rows_p, diag_p, rec_p = create_table_row("Driven", p_h_de, p_h_nde, p_v_de, p_v_nde, p_a_de, p_a_nde)
 
-        df = pd.DataFrame(data_rows)
-        
-        st.write("### Laporan Hasil Inspeksi")
-        
-        # Formatting Table dengan Pandas Styler
-        def highlight_danger(val):
-            if isinstance(val, float) and val > limit_iso:
-                return 'color: red; font-weight: bold'
+        all_rows = rows_d + rows_p
+        df = pd.DataFrame(all_rows, columns=["Titik", "DE", "NDE", "Avr", "Zone", "Remark"])
+
+        # --- D. TAMPILAN OUTPUT ---
+        st.divider()
+        st.subheader("1. Tabel Hasil Pengujian")
+
+        # Styling Function untuk Pandas (Highlighting Background)
+        def highlight_remark(val):
+            val_lower = str(val).lower()
+            if "damage" in val_lower: # Merah (Zone D)
+                return 'background-color: #ff4b4b; color: white; font-weight: bold;'
+            elif "short-term" in val_lower: # Oranye (Zone C)
+                return 'background-color: #ffa500; color: black; font-weight: bold;'
+            elif "unlimited" in val_lower: # Kuning (Zone B)
+                return 'background-color: #ffd700; color: black; font-weight: bold;'
+            elif "new machine" in val_lower: # Hijau (Zone A)
+                return 'background-color: #90ee90; color: black; font-weight: bold;'
             return ''
 
+        # Render Tabel dengan Style
         st.dataframe(
-            df.style.applymap(highlight_danger, subset=['Avr', 'DE', 'NDE'])
-                    .format("{:.2f}", subset=['DE', 'NDE', 'Avr', 'Limit']),
+            df.style.applymap(highlight_remark, subset=['Remark'])
+                    .format("{:.2f}", subset=['DE', 'NDE', 'Avr']),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            height=300
         )
 
-        st.success("Diagnosa Selesai. Silakan export data atau screenshot untuk laporan.")
+        st.subheader("2. Diagnosa & Rekomendasi Teknis")
+        
+        c_diag1, c_diag2 = st.columns(2)
+        
+        # Display Diagnosa Driver
+        with c_diag1:
+            st.markdown("#### ⚡ Driver (Motor)")
+            if "Normal" in diag_d[0]:
+                st.success("✅ Kondisi Mekanikal Baik")
+            else:
+                for d in diag_d:
+                    st.error(f"⚠️ **{d}**")
+                with st.expander("Lihat Rekomendasi Perbaikan", expanded=True):
+                    for r in rec_d:
+                        st.markdown(f"- {r}")
+
+        # Display Diagnosa Driven
+        with c_diag2:
+            st.markdown("#### 💧 Driven (Pompa)")
+            if "Normal" in diag_p[0]:
+                st.success("✅ Kondisi Mekanikal Baik")
+            else:
+                for d in diag_p:
+                    st.error(f"⚠️ **{d}**")
+                with st.expander("Lihat Rekomendasi Perbaikan", expanded=True):
+                    for r in rec_p:
+                        st.markdown(f"- {r}")
