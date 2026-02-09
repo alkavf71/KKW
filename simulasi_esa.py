@@ -129,12 +129,20 @@ with tab1:
             
             st.subheader("📋 Tabel Laporan Vibrasi")
             
-            # Styling Tabel (Highlighting)
+# Styling Tabel (Warna Soft Pastel - Anti Silau)
             def highlight_row(row):
-                if "ZONE D" in row['Remark']: return ['background-color: #ffcccc']*len(row)
-                elif "ZONE C" in row['Remark']: return ['background-color: #fff3cd']*len(row)
-                elif "ZONE A" in row['Remark']: return ['background-color: #d4edda; font-weight: bold']*len(row)
-                else: return ['background-color: #f8f9fa']*len(row) # Zone B default
+                if "ZONE D" in row['Remark']: 
+                    # Merah Muda Pucat (Soft Red) - Untuk Bahaya
+                    return ['background-color: #ffebee; color: #b71c1c']*len(row) 
+                elif "ZONE C" in row['Remark']: 
+                    # Krem/Kuning Mentega (Soft Yellow) - Untuk Warning
+                    return ['background-color: #fffde7; color: #f57f17']*len(row) 
+                elif "ZONE A" in row['Remark']: 
+                    # Hijau Mint Sangat Muda (Soft Green) - Untuk New Machine
+                    return ['background-color: #e8f5e9; color: #1b5e20; font-weight: bold']*len(row) 
+                else: 
+                    # Putih Bersih - Untuk Normal (Zone B)
+                    return ['background-color: #ffffff; color: #212529']*len(row)
 
             st.dataframe(
                 res['df'].style.apply(highlight_row, axis=1).format({"DE": "{:.2f}", "NDE": "{:.2f}", "Avr": "{:.2f}", "Limit": "{:.2f}"}), 
