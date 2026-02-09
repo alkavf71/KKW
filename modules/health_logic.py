@@ -1,67 +1,64 @@
 from typing import List, Dict
 
 def assess_overall_health(vib_status: str, elec_status: str, temp_max: float, physical_issues: List[str], tech_diagnoses: List[str]) -> Dict:
-    """
-    Fungsi ini sekarang menerima 'tech_diagnoses' (Daftar penyebab teknis)
-    untuk menghasilkan rekomendasi spesifik dan standar referensi.
-    """
     
     severity = 0
     reasons = []
     recommendations = []
-    standards_used = set() # Pakai set agar tidak duplikat
+    standards_used = set() 
 
-    # --- 1. KAMUS REKOMENDASI & STANDAR (KNOWLEDGE BASE) ---
-    # Format: "Kata Kunci": ("Saran Perbaikan", "Standar Referensi")
+    # --- 1. KAMUS REKOMENDASI & STANDAR (UPDATED SESUAI STANDAR PERUSAHAAN) ---
     knowledge_base = {
-        "Misalignment": ("Lakukan Laser Alignment ulang (Toleransi 0.05mm). Cek shimming.", "API 686 Ch. 4 (Alignment)"),
-        "Unbalance": ("Lakukan Balancing Impeller/Rotor di workshop (Grade G6.3/G2.5).", "ISO 1940-1 (Balancing)"),
-        "Soft Foot": ("Cek kekencangan baut kaki motor. Perbaiki shim jika ada celah >0.05mm.", "API 686 Ch. 5 (Mounting)"),
-        "Bearing": ("Jadwalkan penggantian Bearing (DE/NDE). Cek housing fit.", "SKF General Catalogue / OEM"),
-        "Looseness": ("Kencangkan seluruh baut pondasi & baseplate. Cek keretakan grouting.", "API 686 Ch. 5"),
-        "Bent Shaft": ("Cek run-out poros dengan Dial Indicator (Max 0.05mm).", "API 610 (Pump Shaft Runout)"),
-        "Kavitasi": ("Cek NPSH Available. Pastikan valve suction terbuka 100%. Cek strainer buntu.", "API 610 (Centrifugal Pumps)"),
-        "Flow": ("Atur bukaan valve discharge agar masuk ke range operasional (BEP).", "API 610 (Operating Region)"),
-        "Overheat": ("Cek sistem pendingin (Fan/Sirip). Pastikan tidak Overload.", "NEMA MG-1 / IEEE 1415"),
-        "Seal": ("Ganti Mechanical Seal. Cek sistem flushing.", "API 682 (Sealing Systems)"),
-        "Guard": ("Pasang kembali Coupling Guard sesuai standar safety.", "OSHA / Safety Regulation"),
-        "Volt": ("Cek tegangan input dari panel/PLN. Pastikan unbalance < 3%.", "NEMA MG-1 / ANSI C84.1"),
-        "Curr": ("Cek beban motor. Pastikan tidak melebihi FLA.", "NEMA MG-1")
+        # MEKANIKAL (PUMP & VIBRATION)
+        "Misalignment": ("Lakukan Laser Alignment ulang. Cek shimming & Soft Foot.", "API 686 / ISO 13709"),
+        "Unbalance": ("Lakukan Balancing Impeller (Grade G2.5/G6.3).", "ISO 21940 (Balancing)"),
+        "Soft Foot": ("Cek kekencangan baut kaki motor. Perbaiki shim.", "API 686 Ch. 5"),
+        "Bearing": ("Jadwalkan penggantian Bearing. Cek clearance.", "ISO 13709 (API 610)"),
+        "Looseness": ("Kencangkan baut pondasi/baseplate.", "ISO 13709 / API 686"),
+        "Bent Shaft": ("Cek run-out poros (Max 0.05mm).", "ISO 13709 (API 610)"),
+        "Kavitasi": ("Cek NPSH Available & Strainer Suction.", "ISO 13709 (API 610)"),
+        "Flow": ("Atur valve discharge ke range BEP (Best Efficiency Point).", "ISO 13709 (API 610)"),
+        
+        # SUHU & ELEKTRIKAL (IEC STANDARD)
+        "Overheat": ("Cek sistem pendingin (Fan/Sirip) & Beban.", "IEC 60034-1 (Thermal Class)"),
+        "Volt": ("Cek tegangan input. Pastikan variasi < 10%.", "IEC 60034-1 (Rating & Performance)"),
+        "Curr": ("Cek beban motor (Overload) & Keseimbangan Fasa.", "IEC 60034-1"),
+        
+        # FISIK & SAFETY
+        "Seal": ("Ganti Mechanical Seal. Cek flushing system.", "API 682 / ISO 21049"),
+        "Guard": ("Pasang Coupling Guard (Safety Hazard).", "OSHA 1910 / ISO 45001"),
+        "Ground": ("Perbaiki kabel Grounding (Electrical Safety).", "OSHA 1910 / PUIL")
     }
 
-    # --- 2. ANALISA VIBRASI (ZONA ISO) ---
+    # --- 2. ANALISA VIBRASI (GANTI KE ISO 20816) ---
     if "ZONE D" in vib_status: 
         severity += 3
         reasons.append(f"Vibrasi KRITIS ({vib_status})")
-        standards_used.add("ISO 10816-3 (Vibration Severity)")
+        standards_used.add("ISO 20816 (Vibration Severity)") # Updated dari 10816
     elif "ZONE C" in vib_status: 
         severity += 1
         reasons.append(f"Vibrasi TINGGI ({vib_status})")
-        standards_used.add("ISO 10816-3 (Vibration Severity)")
+        standards_used.add("ISO 20816 (Vibration Severity)") # Updated dari 10816
     elif "ZONE A" in vib_status:
-        standards_used.add("ISO 10816-3 (New Machine Condition)")
+        standards_used.add("ISO 20816 (New Machine)") # Updated dari 10816
 
-    # --- 3. ANALISA DIAGNOSA TEKNIS (AUTO-MAPPING) ---
-    # Loop setiap diagnosa yang ditemukan (misal: "Misalignment", "Overheat")
+    # --- 3. ANALISA DIAGNOSA TEKNIS ---
     for diag in tech_diagnoses:
-        reasons.append(diag) # Tambahkan ke daftar masalah
-        
-        # Cari rekomendasi yang cocok dari knowledge_base
+        reasons.append(diag)
         for keyword, (action, std) in knowledge_base.items():
             if keyword.upper() in diag.upper():
                 if action not in recommendations: recommendations.append(action)
                 standards_used.add(std)
 
-    # --- 4. ANALISA FISIK & LAINNYA ---
+    # --- 4. ANALISA FISIK ---
     if "TRIP" in elec_status: 
         severity += 3
         reasons.append("Elektrikal TRIP")
-        recommendations.append("Cek Panel Elektrikal & Kabel Power.")
+        recommendations.append("Cek Panel & Isolasi Motor.")
     
     if temp_max > 85.0: 
         severity += 3
-        # (Recommendation sudah dicover oleh logic "Overheat" di atas)
-
+        
     for issue in physical_issues:
         if "MAJOR" in issue.upper() or "CRITICAL" in issue.upper():
             severity += 5
@@ -70,24 +67,25 @@ def assess_overall_health(vib_status: str, elec_status: str, temp_max: float, ph
             severity += 1
             reasons.append(f"Fisik: {issue}")
         
-        # Mapping manual untuk fisik
+        # Mapping manual standar fisik
         if "Seal" in issue: standards_used.add("API 682")
-        if "Guard" in issue: standards_used.add("OSHA Safety")
+        if "Guard" in issue: standards_used.add("ISO 45001 (Safety)")
+        if "Oli" in issue: standards_used.add("ISO 12922 (Lubricants)")
 
     # --- 5. KESIMPULAN FINAL ---
     if severity >= 3:
         status = "BAD / DANGER"
-        color = "#e74c3c" # Merah
+        color = "#e74c3c"
         desc = "KONDISI KRITIS - STOP OPERASI"
-        final_action = "❌ SEGERA LAKUKAN PERBAIKAN (Lihat Rekomendasi di Bawah)"
+        final_action = "❌ SEGERA LAKUKAN PERBAIKAN (Lihat Rekomendasi)"
     elif severity >= 1:
         status = "FAIR / WARNING"
-        color = "#f1c40f" # Kuning
+        color = "#f1c40f"
         desc = "PERLU MONITORING KETAT"
-        final_action = "⚠️ JADWALKAN MAINTENANCE (Planned Work Order)"
+        final_action = "⚠️ JADWALKAN MAINTENANCE (Planned WO)"
     else:
         status = "GOOD / PRIMA"
-        color = "#2ecc71" # Hijau
+        color = "#2ecc71"
         desc = "SIAP OPERASI"
         final_action = "✅ LANJUTKAN OPERASI RUTIN"
         if not recommendations: recommendations.append("Pertahankan kondisi operasi.")
